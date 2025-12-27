@@ -83,6 +83,20 @@ class ImageItemManager: ObservableObject {
         currentIndex = items.isEmpty ? -1 : 0
     }
 
+    /// Set images from URL array (from ProjectFileService)
+    func setImages(_ urls: [URL]) {
+        items = urls.map { url in
+            var item = ImageItem(url: url)
+            if let annotationURL = ProjectFileService.shared.getAnnotationURL(for: url),
+               FileManager.default.fileExists(atPath: annotationURL.path) {
+                item.hasAnnotation = true
+                item.annotationURL = annotationURL
+            }
+            return item
+        }
+        currentIndex = items.isEmpty ? 0 : 0
+    }
+
     /// Check for existing annotations
     func checkAnnotations(in annotationsDirectory: URL) {
         let fileManager = FileManager.default

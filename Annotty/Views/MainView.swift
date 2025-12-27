@@ -15,10 +15,12 @@ struct MainView: View {
             TopBarView(
                 currentIndex: viewModel.currentImageIndex,
                 totalCount: viewModel.totalImageCount,
+                isSaving: viewModel.isSaving,
                 onPrevious: { viewModel.previousImage() },
                 onNext: { viewModel.nextImage() },
                 onExport: { showingExportSheet = true },
-                onLoad: { showingImagePicker = true }
+                onLoad: { showingImagePicker = true },
+                onReload: { viewModel.reloadImagesFromProject() }
             )
 
             // Main content area
@@ -54,9 +56,17 @@ struct MainView: View {
             Text("Maximum number of classes reached (8)")
         }
         .sheet(isPresented: $showingImagePicker) {
-            ImagePickerView { url in
-                viewModel.loadImage(from: url)
-            }
+            ImagePickerView(
+                onImageSelected: { url in
+                    viewModel.importImage(from: url)
+                },
+                onFolderSelected: { url in
+                    viewModel.importImagesFromFolder(url)
+                },
+                onProjectSelected: { url in
+                    viewModel.openProject(at: url)
+                }
+            )
         }
         .sheet(isPresented: $showingExportSheet) {
             ExportSheetView(viewModel: viewModel)
@@ -66,6 +76,10 @@ struct MainView: View {
                 showingClassLimitAlert = true
                 viewModel.showClassLimitAlert = false
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            // Save when app goes to background
+            viewModel.saveBeforeBackground()
         }
     }
 }
@@ -99,7 +113,7 @@ struct LeftPanelView: View {
             // Paint/Erase toggle
             VStack(spacing: 8) {
                 Button(action: { isPainting = true }) {
-                    Image(systemName: "paintbrush.fill")
+                    Image(systemName: "pencil.tip")
                         .font(.title2)
                         .foregroundColor(isPainting ? .green : .gray)
                 }

@@ -4,10 +4,12 @@ import SwiftUI
 struct TopBarView: View {
     let currentIndex: Int
     let totalCount: Int
+    let isSaving: Bool
     let onPrevious: () -> Void
     let onNext: () -> Void
     let onExport: () -> Void
     let onLoad: () -> Void
+    let onReload: () -> Void
 
     var body: some View {
         HStack {
@@ -25,6 +27,16 @@ struct TopBarView: View {
             }
             .buttonStyle(.plain)
 
+            // Reload button
+            Button(action: onReload) {
+                Image(systemName: "arrow.clockwise")
+                    .padding(8)
+                    .background(Color.gray.opacity(0.5))
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+            }
+            .buttonStyle(.plain)
+
             Spacer()
 
             // Image navigation
@@ -34,6 +46,19 @@ struct TopBarView: View {
                 onPrevious: onPrevious,
                 onNext: onNext
             )
+
+            // Saving indicator
+            if isSaving {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(0.8)
+                    Text("Saving...")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+                .padding(.leading, 12)
+            }
 
             Spacer()
 
@@ -64,9 +89,11 @@ struct TopBarView: View {
     TopBarView(
         currentIndex: 12,
         totalCount: 128,
+        isSaving: false,
         onPrevious: {},
         onNext: {},
         onExport: {},
-        onLoad: {}
+        onLoad: {},
+        onReload: {}
     )
 }

@@ -44,6 +44,10 @@ class CanvasViewModel: ObservableObject {
 
     @Published var showClassLimitAlert: Bool = false
 
+    // MARK: - Saving State
+
+    @Published private(set) var isSaving: Bool = false
+
     // MARK: - Undo Manager
 
     private let undoManager = AnnotationUndoManager()
@@ -72,9 +76,109 @@ class CanvasViewModel: ObservableObject {
     // MARK: - Initialization
 
     init() {
+        print("🚀 CanvasViewModel init")
         setupRenderer()
         setupBindings()
         setupGestureCallbacks()
+        initializeProjectFolder()
+    }
+
+    /// Initialize the project folder structure and load existing images
+    private func initializeProjectFolder() {
+        guard let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            print("[Project] Failed to get Documents directory")
+            return
+        }
+
+        // Use Documents directly (no subfolder)
+        print("[Project] Root: \(documentsURL.path)")
+
+        do {
+            try ProjectFileService.shared.initializeProject(at: documentsURL)
+            print("[Project] Folder structure: images/, annotations/, labels/")
+            reloadImagesFromProject()
+        } catch {
+            print("[Project] Failed to initialize: \(error)")
+        }
+    }
+
+    /// Open a different project folder
+    func openProject(at folderURL: URL) {
+        let didStartAccessing = folderURL.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing {
+                folderURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        do {
+            try ProjectFileService.shared.initializeProject(at: folderURL)
+            print("[Project] Opened project: \(folderURL.lastPathComponent)")
+            reloadImagesFromProject()
+        } catch {
+            print("[Project] Failed to open: \(error)")
+        }
+    }
+
+    /// Reload images from the project's images folder
+    func reloadImagesFromProject() {
+        let imageURLs = ProjectFileService.shared.getImageURLs()
+        print("[Project] Found \(imageURLs.count) images")
+
+        imageManager.setImages(imageURLs)
+
+        // Load first image with its annotation (if exists)
+        if imageManager.currentItem != nil {
+            loadCurrentImage()
+        }
+    }
+
+    /// Import a single image to the project
+    func importImage(from sourceURL: URL) {
+        do {
+            let destinationURL = try ProjectFileService.shared.copyImageToProject(sourceURL)
+            print("[Import] Copied: \(destinationURL.lastPathComponent)")
+            reloadImagesFromProject()
+
+            if let index = imageManager.items.firstIndex(where: { $0.url == destinationURL }) {
+                imageManager.goTo(index: index)
+                loadCurrentImage()
+            }
+        } catch {
+            print("[Import] Failed: \(error)")
+        }
+    }
+
+    /// Import all images from a folder
+    func importImagesFromFolder(_ folderURL: URL) {
+        let fileManager = FileManager.default
+        let supportedExtensions = ["png", "jpg", "jpeg"]
+
+        let didStartAccessing = folderURL.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing {
+                folderURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        do {
+            let contents = try fileManager.contentsOfDirectory(
+                at: folderURL,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+
+            let imageFiles = contents.filter { supportedExtensions.contains($0.pathExtension.lowercased()) }
+            print("[Import] Found \(imageFiles.count) images in folder")
+
+            for imageURL in imageFiles {
+                _ = try? ProjectFileService.shared.copyImageToProject(imageURL)
+            }
+
+            reloadImagesFromProject()
+        } catch {
+            print("[Import] Folder read failed: \(error)")
+        }
     }
 
     private func setupRenderer() {
@@ -203,25 +307,92 @@ class CanvasViewModel: ObservableObject {
     // MARK: - Image Navigation
 
     func previousImage() {
-        // Auto-save before switching
-        saveCurrentAnnotation()
-        imageManager.previous()
-        loadCurrentImage()
+        guard !isSaving else { return }
+        saveAndNavigate { [weak self] in
+            self?.imageManager.previous()
+        }
     }
 
     func nextImage() {
-        // Auto-save before switching
-        saveCurrentAnnotation()
-        imageManager.next()
-        loadCurrentImage()
+        guard !isSaving else { return }
+        saveAndNavigate { [weak self] in
+            self?.imageManager.next()
+        }
+    }
+
+    /// Save current annotation asynchronously, then navigate
+    private func saveAndNavigate(navigation: @escaping () -> Void) {
+        guard let imageItem = imageManager.currentItem,
+              let textureManager = renderer?.textureManager else {
+            navigation()
+            loadCurrentImage()
+            return
+        }
+
+        // Read mask data from GPU (must be on main thread)
+        guard let maskData = textureManager.readMask(from: currentClassID) else {
+            navigation()
+            loadCurrentImage()
+            return
+        }
+
+        // Check if mask has any data
+        let hasData = maskData.contains { $0 != 0 }
+        guard hasData else {
+            navigation()
+            loadCurrentImage()
+            return
+        }
+
+        let maskWidth = Int(textureManager.maskSize.width)
+        let maskHeight = Int(textureManager.maskSize.height)
+        let color = annotationColor
+        let imageURL = imageItem.url
+
+        // Show saving indicator
+        isSaving = true
+
+        // PNG generation and file write on background thread
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let pngData = self?.createColoredPNG(
+                from: maskData,
+                width: maskWidth,
+                height: maskHeight,
+                color: color
+            ) else {
+                DispatchQueue.main.async {
+                    self?.isSaving = false
+                    navigation()
+                    self?.loadCurrentImage()
+                }
+                return
+            }
+
+            // Save to file
+            do {
+                try ProjectFileService.shared.saveAnnotation(pngData, for: imageURL)
+                print("[Save] Saved annotation (async)")
+            } catch {
+                print("[Save] Failed: \(error)")
+            }
+
+            // Back to main thread for navigation
+            DispatchQueue.main.async {
+                self?.isSaving = false
+                navigation()
+                self?.loadCurrentImage()
+            }
+        }
     }
 
     private func loadCurrentImage() {
         guard let item = imageManager.currentItem else { return }
         loadImage(from: item.url)
 
-        // Load annotation if exists
-        if let annotationURL = item.annotationURL {
+        // Always check for annotation file dynamically (not just cached URL)
+        // This ensures newly saved annotations are detected
+        if let annotationURL = ProjectFileService.shared.getAnnotationURL(for: item.url),
+           FileManager.default.fileExists(atPath: annotationURL.path) {
             loadAnnotation(from: annotationURL)
         }
     }
@@ -242,22 +413,32 @@ class CanvasViewModel: ObservableObject {
         let screenPoint = renderer?.convertTouchToScreen(point) ?? point
         let maskPoint = renderer?.canvasTransform.screenToMask(screenPoint) ?? point
         // Radius in mask coordinates (must match applyStamp calculation)
-        // Add 1 pixel margin to ensure we capture all affected pixels
         let maskScaleFactor = renderer?.canvasTransform.maskScaleFactor ?? 2.0
         let scaleFactor = renderer?.contentScaleFactor ?? 1.0
         let radius = CGFloat(brushRadius * maskScaleFactor * Float(scaleFactor)) + 1.0
+
+        // Use a larger initial bbox to minimize expandStrokePatch calls during stroke
+        // This trades memory for performance (50x brush radius should cover most strokes)
+        let initialRadius = radius * 50
         strokeBbox = CGRect(
-            x: maskPoint.x - radius,
-            y: maskPoint.y - radius,
-            width: radius * 2,
-            height: radius * 2
+            x: maskPoint.x - initialRadius,
+            y: maskPoint.y - initialRadius,
+            width: initialRadius * 2,
+            height: initialRadius * 2
         )
+
+        // Clamp to texture bounds
+        if let textureManager = renderer?.textureManager {
+            let maxWidth = textureManager.maskSize.width
+            let maxHeight = textureManager.maskSize.height
+            strokeBbox = strokeBbox.intersection(CGRect(x: 0, y: 0, width: maxWidth, height: maxHeight))
+        }
 
         // Ensure mask texture exists before capturing patch
         // (texture is created lazily, so first stroke needs this)
         _ = try? renderer?.textureManager.getMaskTexture(for: currentClassID)
 
-        // Capture patch before stroke
+        // Capture patch before stroke (larger area upfront)
         strokeStartPatch = renderer?.textureManager.readMaskRegion(
             from: currentClassID,
             bbox: strokeBbox
@@ -353,8 +534,8 @@ class CanvasViewModel: ObservableObject {
         originalStrokeBbox = .null
         originalStrokePatch = nil
 
-        // Schedule auto-save
-        scheduleAutoSave()
+        // Note: Auto-save removed for performance
+        // Saving happens on image navigation or app background
     }
 
     private func expandStrokePatch(to newBbox: CGRect) {
@@ -500,28 +681,205 @@ class CanvasViewModel: ObservableObject {
         )
     }
 
-    // MARK: - Auto Save
+    // MARK: - Save
 
-    private var autoSaveWorkItem: DispatchWorkItem?
-
-    private func scheduleAutoSave() {
-        autoSaveWorkItem?.cancel()
-
-        autoSaveWorkItem = DispatchWorkItem { [weak self] in
-            self?.saveCurrentAnnotation()
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: autoSaveWorkItem!)
+    /// Save current annotation (called on image navigation and app background)
+    func saveBeforeBackground() {
+        saveCurrentAnnotation()
+        print("[Save] Background save completed")
     }
 
     private func saveCurrentAnnotation() {
-        // Implementation will be added in Phase 4
-        print("Auto-save triggered")
+        guard let imageItem = imageManager.currentItem,
+              let textureManager = renderer?.textureManager else {
+            print("[Save] No image or texture manager")
+            return
+        }
+
+        // Read mask data from GPU
+        guard let maskData = textureManager.readMask(from: currentClassID) else {
+            print("[Save] No mask data to save")
+            return
+        }
+
+        // Check if mask has any data (skip save if empty)
+        let hasData = maskData.contains { $0 != 0 }
+        guard hasData else {
+            print("[Save] Mask is empty, skipping save")
+            return
+        }
+
+        // Convert binary mask to color PNG
+        let maskWidth = Int(textureManager.maskSize.width)
+        let maskHeight = Int(textureManager.maskSize.height)
+
+        guard let pngData = createColoredPNG(
+            from: maskData,
+            width: maskWidth,
+            height: maskHeight,
+            color: annotationColor
+        ) else {
+            print("[Save] Failed to create PNG")
+            return
+        }
+
+        // Save to annotations folder
+        do {
+            try ProjectFileService.shared.saveAnnotation(pngData, for: imageItem.url)
+            print("[Save] Saved annotation for \(imageItem.baseName)")
+        } catch {
+            print("[Save] Failed: \(error)")
+        }
     }
 
     private func loadAnnotation(from url: URL) {
-        // Implementation will be added in Phase 4
-        print("Loading annotation from: \(url)")
+        guard let textureManager = renderer?.textureManager,
+              let data = try? Data(contentsOf: url),
+              let image = UIImage(data: data),
+              let cgImage = image.cgImage else {
+            print("[Load] Failed to load annotation image")
+            return
+        }
+
+        let width = cgImage.width
+        let height = cgImage.height
+
+        // Read pixel data from PNG
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var pixelData = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: &pixelData,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            print("[Load] Failed to create context")
+            return
+        }
+
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        // Convert to binary mask: white (#FFFFFF) or transparent = 0, any other color = 1
+        var maskData = [UInt8](repeating: 0, count: width * height)
+        for i in 0..<(width * height) {
+            let offset = i * bytesPerPixel
+            let r = pixelData[offset]
+            let g = pixelData[offset + 1]
+            let b = pixelData[offset + 2]
+            let a = pixelData[offset + 3]
+
+            // If transparent or white, it's background
+            let isBackground = a < 128 || (r > 250 && g > 250 && b > 250)
+            maskData[i] = isBackground ? 0 : 1
+        }
+
+        // Check if we need to resize (annotation size might differ from mask size)
+        let maskWidth = Int(textureManager.maskSize.width)
+        let maskHeight = Int(textureManager.maskSize.height)
+
+        if width == maskWidth && height == maskHeight {
+            // Same size, upload directly
+            do {
+                try textureManager.uploadMask(maskData, to: currentClassID)
+                print("[Load] Loaded annotation (\(width)x\(height))")
+            } catch {
+                print("[Load] Upload failed: \(error)")
+            }
+        } else {
+            // Need to resize - use nearest neighbor for binary mask
+            let resizedMask = resizeMask(
+                maskData,
+                fromWidth: width, fromHeight: height,
+                toWidth: maskWidth, toHeight: maskHeight
+            )
+            do {
+                try textureManager.uploadMask(resizedMask, to: currentClassID)
+                print("[Load] Loaded and resized annotation (\(width)x\(height) → \(maskWidth)x\(maskHeight))")
+            } catch {
+                print("[Load] Upload failed: \(error)")
+            }
+        }
+    }
+
+    /// Create a colored PNG from binary mask data
+    private func createColoredPNG(from maskData: [UInt8], width: Int, height: Int, color: Color) -> Data? {
+        // Convert SwiftUI Color to RGBA
+        let uiColor = UIColor(color)
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+
+        let r = UInt8(red * 255)
+        let g = UInt8(green * 255)
+        let b = UInt8(blue * 255)
+
+        // Create RGBA pixel data
+        let bytesPerPixel = 4
+        var pixelData = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
+
+        for i in 0..<(width * height) {
+            let offset = i * bytesPerPixel
+            if maskData[i] != 0 {
+                // Masked pixel: use annotation color
+                pixelData[offset] = r
+                pixelData[offset + 1] = g
+                pixelData[offset + 2] = b
+                pixelData[offset + 3] = 255
+            } else {
+                // Background: white with full alpha (or transparent)
+                pixelData[offset] = 255
+                pixelData[offset + 1] = 255
+                pixelData[offset + 2] = 255
+                pixelData[offset + 3] = 255
+            }
+        }
+
+        // Create CGImage
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: &pixelData,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * bytesPerPixel,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ),
+              let cgImage = context.makeImage() else {
+            return nil
+        }
+
+        // Convert to PNG data
+        let uiImage = UIImage(cgImage: cgImage)
+        return uiImage.pngData()
+    }
+
+    /// Resize binary mask using nearest neighbor interpolation
+    private func resizeMask(_ source: [UInt8], fromWidth: Int, fromHeight: Int, toWidth: Int, toHeight: Int) -> [UInt8] {
+        var result = [UInt8](repeating: 0, count: toWidth * toHeight)
+
+        let scaleX = Float(fromWidth) / Float(toWidth)
+        let scaleY = Float(fromHeight) / Float(toHeight)
+
+        for y in 0..<toHeight {
+            for x in 0..<toWidth {
+                let srcX = Int(Float(x) * scaleX)
+                let srcY = Int(Float(y) * scaleY)
+                let srcIndex = srcY * fromWidth + srcX
+                let dstIndex = y * toWidth + x
+
+                if srcIndex < source.count {
+                    result[dstIndex] = source[srcIndex]
+                }
+            }
+        }
+
+        return result
     }
 
     // MARK: - Class Management
