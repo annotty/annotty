@@ -18,6 +18,7 @@ struct MainView: View {
                 isSaving: viewModel.isSaving,
                 onPrevious: { viewModel.previousImage() },
                 onNext: { viewModel.nextImage() },
+                onGoTo: { index in viewModel.goToImage(index: index) },
                 onExport: { showingExportSheet = true },
                 onLoad: { showingImagePicker = true },
                 onReload: { viewModel.reloadImagesFromProject() }

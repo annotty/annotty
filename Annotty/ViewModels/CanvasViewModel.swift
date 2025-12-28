@@ -320,6 +320,14 @@ class CanvasViewModel: ObservableObject {
         }
     }
 
+    func goToImage(index: Int) {
+        guard !isSaving else { return }
+        guard index != currentImageIndex else { return }
+        saveAndNavigate { [weak self] in
+            self?.imageManager.goTo(index: index)
+        }
+    }
+
     /// Save current annotation asynchronously, then navigate
     private func saveAndNavigate(navigation: @escaping () -> Void) {
         guard let imageItem = imageManager.currentItem,

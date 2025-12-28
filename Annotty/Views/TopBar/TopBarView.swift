@@ -7,6 +7,7 @@ struct TopBarView: View {
     let isSaving: Bool
     let onPrevious: () -> Void
     let onNext: () -> Void
+    let onGoTo: (Int) -> Void
     let onExport: () -> Void
     let onLoad: () -> Void
     let onReload: () -> Void
@@ -44,7 +45,8 @@ struct TopBarView: View {
                 currentIndex: currentIndex,
                 totalCount: totalCount,
                 onPrevious: onPrevious,
-                onNext: onNext
+                onNext: onNext,
+                onGoTo: onGoTo
             )
 
             // Saving indicator
@@ -92,6 +94,7 @@ struct TopBarView: View {
         isSaving: false,
         onPrevious: {},
         onNext: {},
+        onGoTo: { _ in },
         onExport: {},
         onLoad: {},
         onReload: {}
