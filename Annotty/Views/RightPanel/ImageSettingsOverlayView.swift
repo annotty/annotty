@@ -10,10 +10,16 @@ struct ImageSettingsOverlayView: View {
     @Binding var classNames: [String]
     var onClearClassNames: () -> Void
 
-    /// Preset colors for class editing display
+    /// Preset colors for class editing display (must match MetalRenderer.classColors)
     private let presetColors: [Color] = [
-        .red, .orange, .yellow, .green,
-        .cyan, .blue, .purple, .pink
+        Color(red: 1, green: 0, blue: 0),        // 1: red
+        Color(red: 1, green: 0.5, blue: 0),      // 2: orange
+        Color(red: 1, green: 1, blue: 0),        // 3: yellow
+        Color(red: 0, green: 1, blue: 0),        // 4: green
+        Color(red: 0, green: 1, blue: 1),        // 5: cyan
+        Color(red: 0, green: 0, blue: 1),        // 6: blue
+        Color(red: 0.5, green: 0, blue: 1),      // 7: purple
+        Color(red: 1, green: 0.4, blue: 0.7)     // 8: pink
     ]
 
     var body: some View {

@@ -8,6 +8,7 @@ struct TopBarView: View {
     let onPrevious: () -> Void
     let onNext: () -> Void
     let onGoTo: (Int) -> Void
+    let onResetView: () -> Void
     let onClear: () -> Void
     let onExport: () -> Void
     let onLoad: () -> Void
@@ -65,6 +66,21 @@ struct TopBarView: View {
 
             Spacer()
 
+            // Fit view button (reset pan/zoom/rotation)
+            Button(action: onResetView) {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    Text("Fit")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.gray.opacity(0.6))
+                .foregroundColor(.white)
+                .cornerRadius(8)
+            }
+            .buttonStyle(.plain)
+            .disabled(totalCount == 0)
+
             // Clear annotation button
             Button(action: onClear) {
                 HStack(spacing: 4) {
@@ -111,6 +127,7 @@ struct TopBarView: View {
         onPrevious: {},
         onNext: {},
         onGoTo: { _ in },
+        onResetView: {},
         onClear: {},
         onExport: {},
         onLoad: {},

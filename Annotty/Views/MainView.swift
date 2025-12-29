@@ -19,6 +19,7 @@ struct MainView: View {
                 onPrevious: { viewModel.previousImage() },
                 onNext: { viewModel.nextImage() },
                 onGoTo: { index in viewModel.goToImage(index: index) },
+                onResetView: { viewModel.resetView() },
                 onClear: { viewModel.clearAllAnnotations() },
                 onExport: { showingExportSheet = true },
                 onLoad: { showingImagePicker = true },

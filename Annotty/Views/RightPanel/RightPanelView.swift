@@ -9,11 +9,16 @@ struct RightPanelView: View {
     let onSAMTapped: () -> Void
 
     /// Preset colors for annotation (index+1 = classID)
-    /// Class 1=red, 2=orange, 3=yellow, 4=green, 5=cyan, 6=blue, 7=purple, 8=pink
+    /// These must match MetalRenderer.classColors exactly
     private let presetColors: [Color] = [
-        .red, .orange, .yellow,
-        .green, .cyan, .blue,
-        .purple, .pink
+        Color(red: 1, green: 0, blue: 0),        // 1: red
+        Color(red: 1, green: 0.5, blue: 0),      // 2: orange
+        Color(red: 1, green: 1, blue: 0),        // 3: yellow
+        Color(red: 0, green: 1, blue: 0),        // 4: green
+        Color(red: 0, green: 1, blue: 1),        // 5: cyan
+        Color(red: 0, green: 0, blue: 1),        // 6: blue
+        Color(red: 0.5, green: 0, blue: 1),      // 7: purple
+        Color(red: 1, green: 0.4, blue: 0.7)     // 8: pink
     ]
 
     /// Display name for a class (shows class number if unnamed)
@@ -143,7 +148,7 @@ struct RightPanelView: View {
 
 #Preview {
     RightPanelView(
-        annotationColor: .constant(.red),
+        annotationColor: .constant(Color(red: 1, green: 0, blue: 0)),
         isFillMode: .constant(false),
         classNames: ["iris", "eyelid", "sclera", "pupil", "", "", "", ""],
         onSettingsTapped: {},

@@ -32,8 +32,18 @@ struct CanvasTransform {
     }
 
     /// Inverse of the combined transformation matrix
+    /// Returns identity transform if inversion fails (degenerate matrix)
     var inverseMatrix: CGAffineTransform {
-        matrix.inverted()
+        let inverted = matrix.inverted()
+        // Check if inversion produced valid values (not NaN or infinite)
+        if inverted.a.isFinite && inverted.b.isFinite &&
+           inverted.c.isFinite && inverted.d.isFinite &&
+           inverted.tx.isFinite && inverted.ty.isFinite {
+            return inverted
+        }
+        // Fallback to identity if matrix is degenerate
+        print("[Transform] Degenerate matrix detected, returning identity")
+        return .identity
     }
 
     /// Convert screen point to image coordinates
@@ -48,12 +58,18 @@ struct CanvasTransform {
 
     /// Convert screen point to internal mask coordinates
     /// Uses the dynamic mask scale factor (2x with 4096px max clamp)
+    /// Returns safe values if coordinates become invalid
     func screenToMask(_ screenPoint: CGPoint) -> CGPoint {
         let imagePoint = screenToImage(screenPoint)
-        return CGPoint(
+        let maskPoint = CGPoint(
             x: imagePoint.x * CGFloat(maskScaleFactor),
             y: imagePoint.y * CGFloat(maskScaleFactor)
         )
+        // Validate result - return .zero if NaN/infinite
+        if maskPoint.x.isFinite && maskPoint.y.isFinite {
+            return maskPoint
+        }
+        return .zero
     }
 
     /// Convert internal mask coordinates to screen point
@@ -74,24 +90,40 @@ struct CanvasTransform {
 
     /// Apply pan gesture delta
     mutating func applyPan(delta: CGPoint) {
+        // Guard against invalid inputs
+        guard delta.x.isFinite && delta.y.isFinite else { return }
         translation.x += delta.x
         translation.y += delta.y
     }
 
     /// Apply pinch gesture scale factor around a center point
     mutating func applyPinch(scaleFactor: CGFloat, center: CGPoint) {
+        // Guard against invalid inputs
+        guard scaleFactor.isFinite && scaleFactor > 0 &&
+              center.x.isFinite && center.y.isFinite else {
+            return
+        }
+
         let newScale = (scale * scaleFactor).clamped(to: Self.minScale...Self.maxScale)
         let actualScaleFactor = newScale / scale
 
         // Adjust translation to keep center point fixed
-        translation.x = center.x - (center.x - translation.x) * actualScaleFactor
-        translation.y = center.y - (center.y - translation.y) * actualScaleFactor
+        let newTransX = center.x - (center.x - translation.x) * actualScaleFactor
+        let newTransY = center.y - (center.y - translation.y) * actualScaleFactor
 
-        scale = newScale
+        // Only apply if results are valid
+        if newTransX.isFinite && newTransY.isFinite {
+            translation.x = newTransX
+            translation.y = newTransY
+            scale = newScale
+        }
     }
 
     /// Apply rotation gesture angle delta around a center point
     mutating func applyRotation(angleDelta: CGFloat, center: CGPoint) {
+        // Guard against invalid inputs
+        guard angleDelta.isFinite && center.x.isFinite && center.y.isFinite else { return }
+
         // Free rotation, no snapping
         rotation += angleDelta
 
@@ -101,8 +133,14 @@ struct CanvasTransform {
         let dx = translation.x - center.x
         let dy = translation.y - center.y
 
-        translation.x = center.x + dx * cosA - dy * sinA
-        translation.y = center.y + dx * sinA + dy * cosA
+        let newTransX = center.x + dx * cosA - dy * sinA
+        let newTransY = center.y + dx * sinA + dy * cosA
+
+        // Only apply if results are valid
+        if newTransX.isFinite && newTransY.isFinite {
+            translation.x = newTransX
+            translation.y = newTransY
+        }
     }
 
     /// Reset to identity transform

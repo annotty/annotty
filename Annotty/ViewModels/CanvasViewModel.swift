@@ -29,10 +29,17 @@ class CanvasViewModel: ObservableObject {
     // MARK: - Class Management
 
     /// Preset colors mapped to class IDs (index+1 = classID)
+    /// These must match the colors in MetalRenderer.classColors exactly
     /// Class 1=red, 2=orange, 3=yellow, 4=green, 5=cyan, 6=blue, 7=purple, 8=pink
     static let classColors: [Color] = [
-        .red, .orange, .yellow, .green,
-        .cyan, .blue, .purple, .pink
+        Color(red: 1, green: 0, blue: 0),        // 1: red
+        Color(red: 1, green: 0.5, blue: 0),      // 2: orange
+        Color(red: 1, green: 1, blue: 0),        // 3: yellow
+        Color(red: 0, green: 1, blue: 0),        // 4: green
+        Color(red: 0, green: 1, blue: 1),        // 5: cyan
+        Color(red: 0, green: 0, blue: 1),        // 6: blue
+        Color(red: 0.5, green: 0, blue: 1),      // 7: purple
+        Color(red: 1, green: 0.4, blue: 0.7)     // 8: pink
     ]
 
     /// Current active class ID (1-8, 0 = eraser/background)
@@ -51,7 +58,7 @@ class CanvasViewModel: ObservableObject {
 
     // MARK: - Display Settings
 
-    @Published var annotationColor: Color = .red {
+    @Published var annotationColor: Color = Color(red: 1, green: 0, blue: 0) {
         didSet {
             // Update currentClassID based on selected color (index + 1)
             if let index = Self.classColors.firstIndex(of: annotationColor) {
@@ -445,6 +452,13 @@ class CanvasViewModel: ObservableObject {
         let screenPoint = renderer?.convertTouchToScreen(point) ?? point
         let maskPoint = renderer?.canvasTransform.screenToMask(screenPoint) ?? point
 
+        // Guard against invalid coordinates (NaN or infinite from degenerate transforms)
+        guard maskPoint.x.isFinite && maskPoint.y.isFinite else {
+            print("[Stroke] Invalid maskPoint at begin: \(maskPoint), skipping stroke setup")
+            isDrawing = false
+            return
+        }
+
         // Ensure mask texture exists before capturing patch
         _ = try? renderer?.textureManager.getMaskTexture()
 
@@ -516,6 +530,10 @@ class CanvasViewModel: ObservableObject {
                 if strokePointCounter % 20 == 0 {
                     let screenPoint = renderer?.convertTouchToScreen(interpolatedPoint) ?? interpolatedPoint
                     let maskPoint = renderer?.canvasTransform.screenToMask(screenPoint) ?? interpolatedPoint
+
+                    // Skip if coordinates are invalid (NaN or infinite)
+                    guard maskPoint.x.isFinite && maskPoint.y.isFinite else { continue }
+
                     let maskScaleFactor = renderer?.canvasTransform.maskScaleFactor ?? 2.0
                     // Radius in mask coordinates (UI "1" = 1 original image pixel)
                     let radius = CGFloat(brushRadius * maskScaleFactor) + 1.0
@@ -584,6 +602,13 @@ class CanvasViewModel: ObservableObject {
               let textureManager = renderer?.textureManager,
               let texture = textureManager.maskTexture else { return }
 
+        // Guard against invalid bbox values (NaN or infinite)
+        guard newBbox.minX.isFinite && newBbox.minY.isFinite &&
+              newBbox.maxX.isFinite && newBbox.maxY.isFinite else {
+            print("[Stroke] Invalid bbox values, skipping expansion")
+            return
+        }
+
         // Calculate integer bounds for new bbox
         // Use floor for min and ceil for max to ensure we capture all affected pixels
         let newMinX = max(0, Int(floor(newBbox.minX)))
@@ -608,6 +633,12 @@ class CanvasViewModel: ObservableObject {
         )
 
         // Calculate integer bounds for previous bbox
+        // Guard against invalid values
+        guard originalStrokeBbox.minX.isFinite && originalStrokeBbox.minY.isFinite &&
+              originalStrokeBbox.maxX.isFinite && originalStrokeBbox.maxY.isFinite else {
+            print("[Stroke] Invalid originalStrokeBbox values, skipping expansion")
+            return
+        }
         let prevMinX = max(0, Int(originalStrokeBbox.minX))
         let prevMinY = max(0, Int(originalStrokeBbox.minY))
         let prevMaxX = min(texture.width, Int(originalStrokeBbox.maxX))
@@ -691,6 +722,13 @@ class CanvasViewModel: ObservableObject {
     func handleRotationDelta(angle: CGFloat, at center: CGPoint) {
         let screenCenter = renderer?.convertTouchToScreen(center) ?? center
         renderer?.canvasTransform.applyRotation(angleDelta: angle, center: screenCenter)
+    }
+
+    /// Reset view to default (pan/zoom/rotation)
+    func resetView() {
+        renderer?.canvasTransform.reset()
+        currentScale = 1.0
+        print("[View] Reset to default")
     }
 
     // MARK: - Undo/Redo
@@ -993,6 +1031,12 @@ class CanvasViewModel: ObservableObject {
         // Convert touch point to screen pixels, then to mask coordinates
         let screenPoint = renderer.convertTouchToScreen(touchPoint)
         let maskPoint = renderer.canvasTransform.screenToMask(screenPoint)
+
+        // Guard against invalid coordinates (NaN or infinite from degenerate transforms)
+        guard maskPoint.x.isFinite && maskPoint.y.isFinite else {
+            print("[FloodFill] Invalid maskPoint: \(maskPoint), skipping fill")
+            return
+        }
 
         let maskWidth = Int(textureManager.maskSize.width)
         let maskHeight = Int(textureManager.maskSize.height)
