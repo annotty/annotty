@@ -19,13 +19,31 @@ class MetalRenderer: NSObject, ObservableObject {
 
     // MARK: - Uniforms
 
-    @Published var imageAlpha: Float = 1.0
-    @Published var maskAlpha: Float = 0.5
-    @Published var maskColor: simd_float4 = simd_float4(1, 0, 0, 0.5) // Red default
+    /// Image contrast (0.0 - 2.0, 1.0 = normal)
+    @Published var imageContrast: Float = 1.0
+    /// Image brightness (-1.0 to 1.0, 0.0 = normal)
+    @Published var imageBrightness: Float = 0.0
+    /// Mask fill opacity (0.0 - 1.0, affects fill only, not edges)
+    @Published var maskFillAlpha: Float = 0.5
+
+    /// Class colors for rendering (index 0 unused, 1-8 = class colors)
+    /// Default: red, orange, yellow, green, cyan, blue, purple, pink
+    var classColors: [simd_float4] = [
+        simd_float4(0, 0, 0, 0),        // 0: unused
+        simd_float4(1, 0, 0, 1),        // 1: red
+        simd_float4(1, 0.5, 0, 1),      // 2: orange
+        simd_float4(1, 1, 0, 1),        // 3: yellow
+        simd_float4(0, 1, 0, 1),        // 4: green
+        simd_float4(0, 1, 1, 1),        // 5: cyan
+        simd_float4(0, 0, 1, 1),        // 6: blue
+        simd_float4(0.5, 0, 1, 1),      // 7: purple
+        simd_float4(1, 0.4, 0.7, 1)     // 8: pink
+    ]
 
     // MARK: - State
 
-    @Published var currentClassID: Int = 0
+    /// Current class ID for drawing (1-8, 0 = eraser)
+    @Published var currentClassID: Int = 1
     var canvasTransform = CanvasTransform()
     private var viewportSize: CGSize = .zero
     private(set) var contentScaleFactor: CGFloat = 1.0
@@ -138,7 +156,7 @@ class MetalRenderer: NSObject, ObservableObject {
             renderEncoder.setFragmentTexture(imageTexture, index: 0)
         }
 
-        if let maskTexture = textureManager.maskTextures[currentClassID] {
+        if let maskTexture = textureManager.maskTexture {
             renderEncoder.setFragmentTexture(maskTexture, index: 1)
         }
 
@@ -153,28 +171,36 @@ class MetalRenderer: NSObject, ObservableObject {
 
     /// Create uniforms structure for shaders
     private func createUniforms() -> CanvasUniforms {
+        // Build class colors tuple (9 elements: 0 unused, 1-8 = class colors)
+        let colors = (
+            classColors[0], classColors[1], classColors[2], classColors[3],
+            classColors[4], classColors[5], classColors[6], classColors[7],
+            classColors[8]
+        )
+
         return CanvasUniforms(
             transform: canvasTransform.toSimdMatrix(),
             inverseTransform: canvasTransform.toInverseSimdMatrix(),
-            imageAlpha: imageAlpha,
-            maskAlpha: maskAlpha,
-            _padding1: .zero,
-            maskColor: maskColor,
+            imageContrast: imageContrast,
+            imageBrightness: imageBrightness,
+            maskFillAlpha: maskFillAlpha,
+            _padding1: 0,
             canvasSize: simd_float2(Float(viewportSize.width), Float(viewportSize.height)),
             imageSize: simd_float2(Float(textureManager.imageSize.width), Float(textureManager.imageSize.height)),
             maskSize: simd_float2(Float(textureManager.maskSize.width), Float(textureManager.maskSize.height)),
             maskScaleFactor: textureManager.maskScaleFactor,
             _padding2: 0,
-            _padding3: .zero
+            classColors: colors
         )
     }
 
     // MARK: - Brush Operations
 
     /// Apply a brush stamp at the given position (point is in UIKit points)
+    /// When painting, writes currentClassID to mask; when erasing, writes 0
     func applyStamp(at point: CGPoint, radius: Float, isPainting: Bool) {
         guard let computePipeline = brushStampPipelineState,
-              let maskTexture = try? textureManager.getMaskTexture(for: currentClassID),
+              let maskTexture = try? textureManager.getMaskTexture(),
               let commandBuffer = commandQueue.makeCommandBuffer(),
               let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             return
@@ -185,15 +211,18 @@ class MetalRenderer: NSObject, ObservableObject {
         // Convert screen point to mask coordinates
         let maskPoint = canvasTransform.screenToMask(screenPoint)
 
-        // Brush radius needs to account for:
-        // - maskScaleFactor: convert from image pixels to mask pixels
-        // - contentScaleFactor: convert from UI points to screen pixels
-        let adjustedRadius = radius * canvasTransform.maskScaleFactor * Float(contentScaleFactor)
+        // Brush radius in mask coordinates
+        // UI radius is in original image pixels, multiply by maskScaleFactor to get mask pixels
+        // (contentScaleFactor is NOT applied - we want UI "1" = 1 original image pixel)
+        let adjustedRadius = radius * canvasTransform.maskScaleFactor
+
+        // Paint value: currentClassID when painting, 0 when erasing
+        let paintValue: UInt8 = isPainting ? UInt8(currentClassID) : 0
 
         var params = BrushParams(
             center: simd_float2(Float(maskPoint.x), Float(maskPoint.y)),
             radius: adjustedRadius,
-            paintValue: isPainting ? 1 : 0,
+            paintValue: paintValue,
             _padding: (0, 0, 0)
         )
 
@@ -218,10 +247,11 @@ class MetalRenderer: NSObject, ObservableObject {
     }
 
     /// Apply multiple stamps in a single command buffer (optimized for strokes)
+    /// When painting, writes currentClassID to mask; when erasing, writes 0
     func applyStamps(at points: [CGPoint], radius: Float, isPainting: Bool) {
         guard points.count > 0,
               let computePipeline = brushStampPipelineState,
-              let maskTexture = try? textureManager.getMaskTexture(for: currentClassID),
+              let maskTexture = try? textureManager.getMaskTexture(),
               let commandBuffer = commandQueue.makeCommandBuffer(),
               let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             return
@@ -237,8 +267,11 @@ class MetalRenderer: NSObject, ObservableObject {
             depth: 1
         )
 
-        // Brush radius adjusted for mask and screen scale
-        let adjustedRadius = radius * canvasTransform.maskScaleFactor * Float(contentScaleFactor)
+        // Brush radius in mask coordinates (UI "1" = 1 original image pixel)
+        let adjustedRadius = radius * canvasTransform.maskScaleFactor
+
+        // Paint value: currentClassID when painting, 0 when erasing
+        let paintValue: UInt8 = isPainting ? UInt8(currentClassID) : 0
 
         // Encode all stamps in a single command buffer
         for point in points {
@@ -248,7 +281,7 @@ class MetalRenderer: NSObject, ObservableObject {
             var params = BrushParams(
                 center: simd_float2(Float(maskPoint.x), Float(maskPoint.y)),
                 radius: adjustedRadius,
-                paintValue: isPainting ? 1 : 0,
+                paintValue: paintValue,
                 _padding: (0, 0, 0)
             )
 
@@ -265,10 +298,10 @@ class MetalRenderer: NSObject, ObservableObject {
         applyStamps(at: points, radius: radius, isPainting: isPainting)
     }
 
-    /// Clear current mask
-    func clearCurrentMask() {
+    /// Clear the entire mask (all classes)
+    func clearMask() {
         guard let computePipeline = clearMaskPipelineState,
-              let maskTexture = textureManager.maskTextures[currentClassID],
+              let maskTexture = textureManager.maskTexture,
               let commandBuffer = commandQueue.makeCommandBuffer(),
               let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             return
@@ -326,14 +359,10 @@ class MetalRenderer: NSObject, ObservableObject {
 
     // MARK: - Class Management
 
-    /// Set current class for editing
+    /// Set current class for drawing (1-8)
     func setCurrentClass(_ classID: Int) {
+        guard classID >= 1 && classID <= TextureManager.maxClasses else { return }
         currentClassID = classID
-    }
-
-    /// Check if we can add more classes
-    var canAddClass: Bool {
-        textureManager.maskTextures.count < TextureManager.maxClasses
     }
 }
 
@@ -344,16 +373,23 @@ class MetalRenderer: NSObject, ObservableObject {
 struct CanvasUniforms {
     var transform: simd_float3x3
     var inverseTransform: simd_float3x3
-    var imageAlpha: Float
-    var maskAlpha: Float
-    var _padding1: simd_float2  // Padding to align maskColor to 16 bytes
-    var maskColor: simd_float4
+    /// Image contrast (0.0 - 2.0, 1.0 = normal)
+    var imageContrast: Float
+    /// Image brightness (-1.0 to 1.0, 0.0 = normal)
+    var imageBrightness: Float
+    /// Mask fill opacity (0.0 - 1.0, affects fill only, not edges)
+    var maskFillAlpha: Float
+    /// Padding for alignment
+    var _padding1: Float
     var canvasSize: simd_float2
     var imageSize: simd_float2
     var maskSize: simd_float2
     var maskScaleFactor: Float
-    var _padding2: Float  // Padding for 16-byte struct alignment
-    var _padding3: simd_float2
+    var _padding2: Float
+    /// Class colors (index 0 unused, 1-8 = class colors)
+    var classColors: (simd_float4, simd_float4, simd_float4, simd_float4,
+                      simd_float4, simd_float4, simd_float4, simd_float4,
+                      simd_float4)  // 9 elements to match MAX_CLASSES + 1
 }
 
 /// Bridge structure matching ShaderTypes.h

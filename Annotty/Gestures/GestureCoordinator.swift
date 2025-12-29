@@ -48,6 +48,12 @@ class GestureCoordinator: NSObject {
     /// Called when redo triggered (3-finger tap)
     var onRedo: (() -> Void)?
 
+    /// Called when fill tap triggered (single tap in fill mode)
+    var onFillTap: ((CGPoint) -> Void)?
+
+    /// Whether fill mode is active
+    var isFillMode: Bool = false
+
     // MARK: - State
 
     private var isDrawing = false
@@ -57,6 +63,7 @@ class GestureCoordinator: NSObject {
     private var currentTouchCount = 0
     private var lastPinchScale: CGFloat = 1.0
     private var drawingInputType: InputType = .finger
+    private var touchStartPoint: CGPoint = .zero  // For fill tap detection
 
     // MARK: - Gesture Recognizers
 
@@ -135,6 +142,14 @@ class GestureCoordinator: NSObject {
         let inputType = classifyTouch(touch)
         let location = touch.location(in: view)
 
+        // Record start point for fill tap detection
+        touchStartPoint = location
+
+        // In fill mode, wait for tap (handled in touchesEnded)
+        if isFillMode {
+            return
+        }
+
         if inputType == .pencil {
             // Pencil: Start drawing immediately
             drawingInputType = .pencil
@@ -189,6 +204,18 @@ class GestureCoordinator: NSObject {
         // Update total touch count
         let remainingTouches = event?.allTouches?.filter { $0.phase != .ended && $0.phase != .cancelled }.count ?? 0
         currentTouchCount = remainingTouches
+
+        guard let touch = touches.first else { return }
+        let location = touch.location(in: view)
+
+        // Fill mode: detect tap (small movement from start)
+        if isFillMode {
+            let distance = hypot(location.x - touchStartPoint.x, location.y - touchStartPoint.y)
+            if distance < 20 {  // Tap threshold: 20 points
+                onFillTap?(location)
+            }
+            return
+        }
 
         if isPendingDraw {
             // Touch ended before 32ms delay - cancel pending

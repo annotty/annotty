@@ -8,6 +8,7 @@ struct TopBarView: View {
     let onPrevious: () -> Void
     let onNext: () -> Void
     let onGoTo: (Int) -> Void
+    let onClear: () -> Void
     let onExport: () -> Void
     let onLoad: () -> Void
     let onReload: () -> Void
@@ -64,11 +65,26 @@ struct TopBarView: View {
 
             Spacer()
 
+            // Clear annotation button
+            Button(action: onClear) {
+                HStack(spacing: 4) {
+                    Image(systemName: "trash")
+                    Text("Clear")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.red.opacity(0.7))
+                .foregroundColor(.white)
+                .cornerRadius(8)
+            }
+            .buttonStyle(.plain)
+            .disabled(totalCount == 0)
+
             // Export button
             Button(action: onExport) {
                 HStack(spacing: 4) {
                     Image(systemName: "square.and.arrow.up")
-                    Text("Export annotation")
+                    Text("Export")
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -95,6 +111,7 @@ struct TopBarView: View {
         onPrevious: {},
         onNext: {},
         onGoTo: { _ in },
+        onClear: {},
         onExport: {},
         onLoad: {},
         onReload: {}

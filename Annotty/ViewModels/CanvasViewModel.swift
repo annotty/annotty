@@ -18,20 +18,67 @@ class CanvasViewModel: ObservableObject {
     @Published var brushRadius: Float = 20
     @Published var isPainting: Bool = true
     @Published var isDrawing: Bool = false
+    @Published var isFillMode: Bool = false {
+        didSet {
+            gestureCoordinator.isFillMode = isFillMode
+        }
+    }
     @Published var lastDrawPoint: CGPoint = .zero
     @Published var currentScale: CGFloat = 1.0  // Current zoom level for UI updates
+
+    // MARK: - Class Management
+
+    /// Preset colors mapped to class IDs (index+1 = classID)
+    /// Class 1=red, 2=orange, 3=yellow, 4=green, 5=cyan, 6=blue, 7=purple, 8=pink
+    static let classColors: [Color] = [
+        .red, .orange, .yellow, .green,
+        .cyan, .blue, .purple, .pink
+    ]
+
+    /// Current active class ID (1-8, 0 = eraser/background)
+    @Published private(set) var currentClassID: Int = 1
+
+    /// Custom class names (index 0-7 = class 1-8)
+    /// Empty string means unnamed class
+    @Published var classNames: [String] = Array(repeating: "", count: 8) {
+        didSet {
+            saveClassNames()
+        }
+    }
+
+    /// UserDefaults key for class names
+    private static let classNamesKey = "annotty.classNames"
 
     // MARK: - Display Settings
 
     @Published var annotationColor: Color = .red {
         didSet {
-            updateRendererColor()
+            // Update currentClassID based on selected color (index + 1)
+            if let index = Self.classColors.firstIndex(of: annotationColor) {
+                currentClassID = index + 1
+                renderer?.setCurrentClass(currentClassID)
+            }
         }
     }
 
-    @Published var imageTransparency: Float = 1.0 {
+    /// Image contrast (0.0 - 2.0, 1.0 = normal, 0% - 200%)
+    @Published var imageContrast: Float = 1.0 {
         didSet {
-            renderer?.imageAlpha = imageTransparency
+            renderer?.imageContrast = imageContrast
+        }
+    }
+
+    /// Image brightness (-1.0 to 1.0, 0.0 = normal)
+    @Published var imageBrightness: Float = 0.0 {
+        didSet {
+            renderer?.imageBrightness = imageBrightness
+        }
+    }
+
+    /// Mask fill opacity (0.0 - 1.0, affects fill only, edges stay opaque)
+    @Published var maskFillAlpha: Float = 0.5 {
+        didSet {
+            renderer?.maskFillAlpha = maskFillAlpha
         }
     }
 
@@ -39,10 +86,6 @@ class CanvasViewModel: ObservableObject {
 
     @Published private(set) var currentImageIndex: Int = 0
     @Published private(set) var totalImageCount: Int = 0
-
-    // MARK: - Alerts
-
-    @Published var showClassLimitAlert: Bool = false
 
     // MARK: - Saving State
 
@@ -66,7 +109,6 @@ class CanvasViewModel: ObservableObject {
     private var strokePoints: [CGPoint] = []
     private var strokeBbox: CGRect = .null
     private var strokeStartPatch: Data?
-    private var currentClassID: Int = 0
 
     /// Original bbox at stroke start (for proper patch expansion)
     private var originalStrokeBbox: CGRect = .null
@@ -80,6 +122,7 @@ class CanvasViewModel: ObservableObject {
         setupRenderer()
         setupBindings()
         setupGestureCallbacks()
+        loadClassNames()
         initializeProjectFolder()
     }
 
@@ -183,7 +226,8 @@ class CanvasViewModel: ObservableObject {
 
     private func setupRenderer() {
         renderer = MetalRenderer()
-        updateRendererColor()
+        // Set initial class ID (1 = red)
+        renderer?.setCurrentClass(currentClassID)
     }
 
     private func setupGestureCallbacks() {
@@ -225,6 +269,13 @@ class CanvasViewModel: ObservableObject {
         gestureCoordinator.onRedo = { [weak self] in
             self?.redo()
         }
+
+        // Fill callback
+        gestureCoordinator.onFillTap = { [weak self] point in
+            self?.floodFill(at: point)
+            // Auto-disable fill mode after fill
+            self?.isFillMode = false
+        }
     }
 
     private func setupBindings() {
@@ -249,37 +300,6 @@ class CanvasViewModel: ObservableObject {
     func updateViewSize(_ size: CGSize) {
         viewSize = size
         renderer?.updateViewportSize(size)
-    }
-
-    // MARK: - Color
-
-    private func updateRendererColor() {
-        guard let renderer = renderer else { return }
-
-        // Convert SwiftUI Color to simd_float4
-        // Use sRGB color space for reliable conversion
-        let uiColor = UIColor(annotationColor)
-        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-
-        // Convert to sRGB color space first for reliable component extraction
-        if let srgbColor = uiColor.cgColor.converted(
-            to: CGColorSpaceCreateDeviceRGB(),
-            intent: .defaultIntent,
-            options: nil
-        ) {
-            let components = srgbColor.components ?? [0, 0, 0, 1]
-            red = components.count > 0 ? components[0] : 0
-            green = components.count > 1 ? components[1] : 0
-            blue = components.count > 2 ? components[2] : 0
-            alpha = components.count > 3 ? components[3] : 1
-        } else {
-            // Fallback to direct extraction
-            uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-        }
-
-        // Set mask color with semi-transparency for overlay effect
-        renderer.maskColor = simd_float4(Float(red), Float(green), Float(blue), 0.5)
-        print("🎨 Updated mask color: R=\(red), G=\(green), B=\(blue)")
     }
 
     // MARK: - Image Loading
@@ -338,7 +358,7 @@ class CanvasViewModel: ObservableObject {
         }
 
         // Read mask data from GPU (must be on main thread)
-        guard let maskData = textureManager.readMask(from: currentClassID) else {
+        guard let maskData = textureManager.readMask() else {
             navigation()
             loadCurrentImage()
             return
@@ -412,45 +432,46 @@ class CanvasViewModel: ObservableObject {
         CGFloat(brushRadius) * 2 * currentScale
     }
 
+    /// Counter for throttling bbox expansion checks
+    private var strokePointCounter: Int = 0
+
     func beginStroke(at point: CGPoint) {
         isDrawing = true
         lastDrawPoint = point
         strokePoints = [point]
+        strokePointCounter = 0
 
         // Convert touch point to screen pixels, then to mask coordinates
         let screenPoint = renderer?.convertTouchToScreen(point) ?? point
         let maskPoint = renderer?.canvasTransform.screenToMask(screenPoint) ?? point
-        // Radius in mask coordinates (must match applyStamp calculation)
-        let maskScaleFactor = renderer?.canvasTransform.maskScaleFactor ?? 2.0
-        let scaleFactor = renderer?.contentScaleFactor ?? 1.0
-        let radius = CGFloat(brushRadius * maskScaleFactor * Float(scaleFactor)) + 1.0
 
-        // Use a larger initial bbox to minimize expandStrokePatch calls during stroke
-        // This trades memory for performance (50x brush radius should cover most strokes)
-        let initialRadius = radius * 50
-        strokeBbox = CGRect(
-            x: maskPoint.x - initialRadius,
-            y: maskPoint.y - initialRadius,
-            width: initialRadius * 2,
-            height: initialRadius * 2
-        )
+        // Ensure mask texture exists before capturing patch
+        _ = try? renderer?.textureManager.getMaskTexture()
 
-        // Clamp to texture bounds
+        // Use very large initial bbox to minimize expensive expandStrokePatch calls
+        // For most strokes, this single upfront allocation is much faster than repeated expansions
         if let textureManager = renderer?.textureManager {
             let maxWidth = textureManager.maskSize.width
             let maxHeight = textureManager.maskSize.height
+
+            // Use minimum 2000x2000 or full texture (whichever is smaller)
+            // This covers most strokes without needing expansion
+            let initialSize: CGFloat = min(2000, min(maxWidth, maxHeight))
+            let halfSize = initialSize / 2
+
+            strokeBbox = CGRect(
+                x: maskPoint.x - halfSize,
+                y: maskPoint.y - halfSize,
+                width: initialSize,
+                height: initialSize
+            )
+
+            // Clamp to texture bounds
             strokeBbox = strokeBbox.intersection(CGRect(x: 0, y: 0, width: maxWidth, height: maxHeight))
         }
 
-        // Ensure mask texture exists before capturing patch
-        // (texture is created lazily, so first stroke needs this)
-        _ = try? renderer?.textureManager.getMaskTexture(for: currentClassID)
-
         // Capture patch before stroke (larger area upfront)
-        strokeStartPatch = renderer?.textureManager.readMaskRegion(
-            from: currentClassID,
-            bbox: strokeBbox
-        )
+        strokeStartPatch = renderer?.textureManager.readMaskRegion(bbox: strokeBbox)
 
         // Store original bbox and patch for proper expansion
         originalStrokeBbox = strokeBbox
@@ -476,6 +497,10 @@ class CanvasViewModel: ObservableObject {
             // Collect all interpolated points for batch processing
             var interpolatedPoints: [CGPoint] = []
 
+            // Track if we need to expand bbox (throttled check)
+            var needsBboxExpansion = false
+            var expandedBbox = strokeBbox
+
             for i in 1...steps {
                 let t = CGFloat(i) / CGFloat(steps)
                 let interpolatedPoint = CGPoint(
@@ -483,37 +508,42 @@ class CanvasViewModel: ObservableObject {
                     y: lastPoint.y + (point.y - lastPoint.y) * t
                 )
 
-                // Expand bbox (convert to screen pixels first)
-                let screenPoint = renderer?.convertTouchToScreen(interpolatedPoint) ?? interpolatedPoint
-                let maskPoint = renderer?.canvasTransform.screenToMask(screenPoint) ?? interpolatedPoint
-                // Radius in mask coordinates (must match applyStamp calculation)
-                // Add 1 pixel margin to ensure we capture all affected pixels
-                let maskScaleFactor = renderer?.canvasTransform.maskScaleFactor ?? 2.0
-                let scaleFactor = renderer?.contentScaleFactor ?? 1.0
-                let radius = CGFloat(brushRadius * maskScaleFactor * Float(scaleFactor)) + 1.0
-                let stampRect = CGRect(
-                    x: maskPoint.x - radius,
-                    y: maskPoint.y - radius,
-                    width: radius * 2,
-                    height: radius * 2
-                )
+                interpolatedPoints.append(interpolatedPoint)
+                strokePointCounter += 1
 
-                if strokeBbox.isNull {
-                    strokeBbox = stampRect
-                } else {
-                    let newBbox = strokeBbox.union(stampRect)
-                    if newBbox != strokeBbox {
-                        // Expand captured patch
-                        expandStrokePatch(to: newBbox)
-                        strokeBbox = newBbox
+                // Only check bbox expansion every 20 points to reduce overhead
+                // The large initial bbox should cover most cases
+                if strokePointCounter % 20 == 0 {
+                    let screenPoint = renderer?.convertTouchToScreen(interpolatedPoint) ?? interpolatedPoint
+                    let maskPoint = renderer?.canvasTransform.screenToMask(screenPoint) ?? interpolatedPoint
+                    let maskScaleFactor = renderer?.canvasTransform.maskScaleFactor ?? 2.0
+                    // Radius in mask coordinates (UI "1" = 1 original image pixel)
+                    let radius = CGFloat(brushRadius * maskScaleFactor) + 1.0
+                    let stampRect = CGRect(
+                        x: maskPoint.x - radius,
+                        y: maskPoint.y - radius,
+                        width: radius * 2,
+                        height: radius * 2
+                    )
+
+                    if !expandedBbox.isNull {
+                        let newBbox = expandedBbox.union(stampRect)
+                        if newBbox != expandedBbox {
+                            expandedBbox = newBbox
+                            needsBboxExpansion = true
+                        }
                     }
                 }
-
-                interpolatedPoints.append(interpolatedPoint)
             }
 
-            // Apply all stamps in a single GPU batch
+            // Apply all stamps in a single GPU batch (this is fast)
             renderer?.applyStamps(at: interpolatedPoints, radius: brushRadius, isPainting: isPainting)
+
+            // Expand bbox only once per continueStroke call if needed (expensive operation)
+            if needsBboxExpansion && expandedBbox != strokeBbox {
+                expandStrokePatch(to: expandedBbox)
+                strokeBbox = expandedBbox
+            }
 
             // Only store the final point (not all interpolated points)
             strokePoints.append(point)
@@ -552,7 +582,7 @@ class CanvasViewModel: ObservableObject {
         guard let previousPatch = originalStrokePatch,
               !originalStrokeBbox.isNull,
               let textureManager = renderer?.textureManager,
-              let texture = textureManager.maskTextures[currentClassID] else { return }
+              let texture = textureManager.maskTexture else { return }
 
         // Calculate integer bounds for new bbox
         // Use floor for min and ceil for max to ensure we capture all affected pixels
@@ -591,17 +621,20 @@ class CanvasViewModel: ObservableObject {
 
         // Copy previous patch data into the new patch at the correct offset
         // This restores the "before stroke" state for the previously covered region
+        // Use row-by-row memcpy for performance (much faster than pixel-by-pixel)
         previousPatch.withUnsafeBytes { prevBuffer in
             guard let prevPtr = prevBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
 
             for y in 0..<prevHeight {
-                for x in 0..<prevWidth {
-                    let prevIndex = y * prevWidth + x
-                    let newIndex = (y + offsetY) * newWidth + (x + offsetX)
-                    if prevIndex < previousPatch.count && newIndex < newPatchData.count {
-                        newPatchData[newIndex] = prevPtr[prevIndex]
-                    }
-                }
+                let prevRowStart = y * prevWidth
+                let newRowStart = (y + offsetY) * newWidth + offsetX
+
+                // Bounds check for safety
+                guard prevRowStart + prevWidth <= previousPatch.count,
+                      newRowStart + prevWidth <= newPatchData.count else { continue }
+
+                // Copy entire row at once using memcpy
+                memcpy(&newPatchData[newRowStart], prevPtr.advanced(by: prevRowStart), prevWidth)
             }
         }
 
@@ -624,11 +657,7 @@ class CanvasViewModel: ObservableObject {
 
         // Restore the mask to pre-stroke state
         if let patch = strokeStartPatch, !strokeBbox.isNull {
-            renderer?.textureManager.writeMaskRegion(
-                to: currentClassID,
-                bbox: strokeBbox,
-                data: patch
-            )
+            renderer?.textureManager.writeMaskRegion(bbox: strokeBbox, data: patch)
         }
 
         // Reset stroke state
@@ -670,11 +699,7 @@ class CanvasViewModel: ObservableObject {
         guard let action = undoManager.undo() else { return }
 
         // Restore previous patch
-        renderer?.textureManager.writeMaskRegion(
-            to: action.classID,
-            bbox: action.bbox,
-            data: action.previousPatch
-        )
+        renderer?.textureManager.writeMaskRegion(bbox: action.bbox, data: action.previousPatch)
     }
 
     func redo() {
@@ -682,11 +707,46 @@ class CanvasViewModel: ObservableObject {
 
         // For redo, we need to re-apply the stroke
         // This is simplified - full implementation would store the new patch too
-        renderer?.textureManager.writeMaskRegion(
-            to: action.classID,
-            bbox: action.bbox,
-            data: action.previousPatch
+        renderer?.textureManager.writeMaskRegion(bbox: action.bbox, data: action.previousPatch)
+    }
+
+    /// Clear all annotations for current image (undoable with 2-finger tap)
+    func clearAllAnnotations() {
+        guard let textureManager = renderer?.textureManager else {
+            print("[Clear] No texture manager")
+            return
+        }
+
+        // Read current mask data for undo
+        guard let currentMaskData = textureManager.readMask() else {
+            print("[Clear] No mask data to backup")
+            return
+        }
+
+        // Check if there's anything to clear
+        let hasData = currentMaskData.contains { $0 != 0 }
+        guard hasData else {
+            print("[Clear] Mask is already empty")
+            return
+        }
+
+        let maskWidth = Int(textureManager.maskSize.width)
+        let maskHeight = Int(textureManager.maskSize.height)
+
+        // Create undo action with full mask
+        let bbox = CGRect(x: 0, y: 0, width: CGFloat(maskWidth), height: CGFloat(maskHeight))
+        let previousPatch = Data(currentMaskData)
+
+        let action = UndoAction(
+            classID: 0,  // 0 indicates clear action
+            bbox: bbox,
+            previousPatch: previousPatch
         )
+        undoManager.pushUndo(action)
+
+        // Clear the mask
+        renderer?.clearMask()
+        print("[Clear] Cleared all annotations (undoable)")
     }
 
     // MARK: - Save
@@ -705,7 +765,7 @@ class CanvasViewModel: ObservableObject {
         }
 
         // Read mask data from GPU
-        guard let maskData = textureManager.readMask(from: currentClassID) else {
+        guard let maskData = textureManager.readMask() else {
             print("[Save] No mask data to save")
             return
         }
@@ -773,7 +833,8 @@ class CanvasViewModel: ObservableObject {
 
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
 
-        // Convert to binary mask: white (#FFFFFF) or transparent = 0, any other color = 1
+        // Convert colored PNG to class ID mask
+        // Each pixel color is snapped to nearest class color
         var maskData = [UInt8](repeating: 0, count: width * height)
         for i in 0..<(width * height) {
             let offset = i * bytesPerPixel
@@ -782,9 +843,14 @@ class CanvasViewModel: ObservableObject {
             let b = pixelData[offset + 2]
             let a = pixelData[offset + 3]
 
-            // If transparent or white, it's background
+            // If transparent or white, it's background (classID = 0)
             let isBackground = a < 128 || (r > 250 && g > 250 && b > 250)
-            maskData[i] = isBackground ? 0 : 1
+            if isBackground {
+                maskData[i] = 0
+            } else {
+                // Find nearest class color
+                maskData[i] = UInt8(findNearestClassID(r: r, g: g, b: b))
+            }
         }
 
         // Check if we need to resize (annotation size might differ from mask size)
@@ -794,7 +860,7 @@ class CanvasViewModel: ObservableObject {
         if width == maskWidth && height == maskHeight {
             // Same size, upload directly
             do {
-                try textureManager.uploadMask(maskData, to: currentClassID)
+                try textureManager.uploadMask(maskData)
                 print("[Load] Loaded annotation (\(width)x\(height))")
             } catch {
                 print("[Load] Upload failed: \(error)")
@@ -807,7 +873,7 @@ class CanvasViewModel: ObservableObject {
                 toWidth: maskWidth, toHeight: maskHeight
             )
             do {
-                try textureManager.uploadMask(resizedMask, to: currentClassID)
+                try textureManager.uploadMask(resizedMask)
                 print("[Load] Loaded and resized annotation (\(width)x\(height) → \(maskWidth)x\(maskHeight))")
             } catch {
                 print("[Load] Upload failed: \(error)")
@@ -815,31 +881,38 @@ class CanvasViewModel: ObservableObject {
         }
     }
 
-    /// Create a colored PNG from binary mask data
+    /// Class colors as RGB tuples (index+1 = classID)
+    private static let classRGBColors: [(UInt8, UInt8, UInt8)] = [
+        (255, 0, 0),       // 1: red
+        (255, 128, 0),     // 2: orange
+        (255, 255, 0),     // 3: yellow
+        (0, 255, 0),       // 4: green
+        (0, 255, 255),     // 5: cyan
+        (0, 0, 255),       // 6: blue
+        (128, 0, 255),     // 7: purple
+        (255, 102, 178)    // 8: pink
+    ]
+
+    /// Create a multi-class colored PNG from mask data
+    /// Mask values: 0=background(white), 1-8=class colors
     private func createColoredPNG(from maskData: [UInt8], width: Int, height: Int, color: Color) -> Data? {
-        // Convert SwiftUI Color to RGBA
-        let uiColor = UIColor(color)
-        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-        uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-
-        let r = UInt8(red * 255)
-        let g = UInt8(green * 255)
-        let b = UInt8(blue * 255)
-
         // Create RGBA pixel data
         let bytesPerPixel = 4
         var pixelData = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
 
         for i in 0..<(width * height) {
             let offset = i * bytesPerPixel
-            if maskData[i] != 0 {
-                // Masked pixel: use annotation color
+            let classID = Int(maskData[i])
+
+            if classID > 0 && classID <= Self.classRGBColors.count {
+                // Masked pixel: use corresponding class color
+                let (r, g, b) = Self.classRGBColors[classID - 1]
                 pixelData[offset] = r
                 pixelData[offset + 1] = g
                 pixelData[offset + 2] = b
                 pixelData[offset + 3] = 255
             } else {
-                // Background: white with full alpha (or transparent)
+                // Background: white with full alpha
                 pixelData[offset] = 255
                 pixelData[offset + 1] = 255
                 pixelData[offset + 2] = 255
@@ -867,6 +940,23 @@ class CanvasViewModel: ObservableObject {
         return uiImage.pngData()
     }
 
+    /// Find the nearest class ID for a given RGB color
+    /// Returns 1-8 for matching class colors, or 1 as fallback
+    private func findNearestClassID(r: UInt8, g: UInt8, b: UInt8) -> Int {
+        var minDistance = Int.max
+        var nearestClassID = 1
+
+        for (index, (cr, cg, cb)) in Self.classRGBColors.enumerated() {
+            let distance = abs(Int(r) - Int(cr)) + abs(Int(g) - Int(cg)) + abs(Int(b) - Int(cb))
+            if distance < minDistance {
+                minDistance = distance
+                nearestClassID = index + 1  // classID is 1-indexed
+            }
+        }
+
+        return nearestClassID
+    }
+
     /// Resize binary mask using nearest neighbor interpolation
     private func resizeMask(_ source: [UInt8], fromWidth: Int, fromHeight: Int, toWidth: Int, toHeight: Int) -> [UInt8] {
         var result = [UInt8](repeating: 0, count: toWidth * toHeight)
@@ -890,16 +980,164 @@ class CanvasViewModel: ObservableObject {
         return result
     }
 
-    // MARK: - Class Management
+    // MARK: - Flood Fill
 
-    func addNewClass() -> Bool {
-        guard renderer?.canAddClass == true else {
-            showClassLimitAlert = true
-            return false
+    /// Perform flood fill at the given touch location
+    func floodFill(at touchPoint: CGPoint) {
+        guard let renderer = renderer else {
+            print("[FloodFill] No renderer or texture manager")
+            return
+        }
+        let textureManager = renderer.textureManager
+
+        // Convert touch point to screen pixels, then to mask coordinates
+        let screenPoint = renderer.convertTouchToScreen(touchPoint)
+        let maskPoint = renderer.canvasTransform.screenToMask(screenPoint)
+
+        let maskWidth = Int(textureManager.maskSize.width)
+        let maskHeight = Int(textureManager.maskSize.height)
+
+        // Ensure the point is within bounds
+        let startX = Int(maskPoint.x)
+        let startY = Int(maskPoint.y)
+
+        guard startX >= 0 && startX < maskWidth && startY >= 0 && startY < maskHeight else {
+            print("[FloodFill] Point out of bounds: (\(startX), \(startY))")
+            return
         }
 
-        // Implementation for adding new class
-        return true
+        // Get current mask data
+        guard var maskData = textureManager.readMask() else {
+            // Create new mask if it doesn't exist
+            _ = try? textureManager.getMaskTexture()
+            guard var newMaskData = textureManager.readMask() else {
+                print("[FloodFill] Failed to get mask data")
+                return
+            }
+            performFloodFill(on: &newMaskData, width: maskWidth, height: maskHeight, startX: startX, startY: startY)
+            return
+        }
+
+        // Check what's at the starting point
+        let startIndex = startY * maskWidth + startX
+        let targetValue = maskData[startIndex]
+
+        // If tapping on the same class as currently selected, do nothing
+        if targetValue == UInt8(currentClassID) {
+            print("[FloodFill] Same class selected, skipping")
+            return
+        }
+
+        // Capture undo patch before flood fill
+        let bbox = CGRect(x: 0, y: 0, width: CGFloat(maskWidth), height: CGFloat(maskHeight))
+        let previousPatch = Data(maskData)
+
+        // Perform flood fill
+        performFloodFill(on: &maskData, width: maskWidth, height: maskHeight, startX: startX, startY: startY)
+
+        // Upload the modified mask
+        do {
+            try textureManager.uploadMask(maskData)
+            print("[FloodFill] Fill completed")
+
+            // Create undo action
+            let action = UndoAction(
+                classID: currentClassID,
+                bbox: bbox,
+                previousPatch: previousPatch
+            )
+            undoManager.pushUndo(action)
+        } catch {
+            print("[FloodFill] Failed to upload mask: \(error)")
+        }
     }
+
+    /// Flood fill algorithm using BFS (Breadth-First Search)
+    /// Replaces contiguous region of targetValue with currentClassID (1-8)
+    /// Works for both empty regions (0) and existing class regions (1-8)
+    private func performFloodFill(on maskData: inout [UInt8], width: Int, height: Int, startX: Int, startY: Int) {
+        let startIndex = startY * width + startX
+        let targetValue = maskData[startIndex]
+        let fillValue = UInt8(currentClassID)
+
+        // If target is same as fill value, nothing to do
+        if targetValue == fillValue {
+            return
+        }
+
+        // BFS queue
+        var queue: [(Int, Int)] = [(startX, startY)]
+        var visited = Set<Int>()
+        visited.insert(startIndex)
+
+        // Direction offsets: up, down, left, right
+        let dx = [0, 0, -1, 1]
+        let dy = [-1, 1, 0, 0]
+
+        var fillCount = 0
+
+        while !queue.isEmpty {
+            let (x, y) = queue.removeFirst()
+            let index = y * width + x
+
+            // Fill this pixel with current class ID
+            maskData[index] = fillValue
+            fillCount += 1
+
+            // Check all 4 neighbors
+            for i in 0..<4 {
+                let nx = x + dx[i]
+                let ny = y + dy[i]
+
+                // Bounds check
+                guard nx >= 0 && nx < width && ny >= 0 && ny < height else { continue }
+
+                let neighborIndex = ny * width + nx
+
+                // Skip if already visited
+                guard !visited.contains(neighborIndex) else { continue }
+
+                // Fill if same value as target (contiguous region)
+                if maskData[neighborIndex] == targetValue {
+                    visited.insert(neighborIndex)
+                    queue.append((nx, ny))
+                }
+            }
+        }
+
+        let action = targetValue == 0 ? "Filled" : "Replaced class \(targetValue) with"
+        print("[FloodFill] \(action) \(fillCount) pixels → class \(currentClassID)")
+    }
+
+    // MARK: - Class Names Persistence
+
+    /// Save class names to UserDefaults
+    private func saveClassNames() {
+        UserDefaults.standard.set(classNames, forKey: Self.classNamesKey)
+        print("[ClassNames] Saved: \(classNames.filter { !$0.isEmpty })")
+    }
+
+    /// Load class names from UserDefaults
+    private func loadClassNames() {
+        if let saved = UserDefaults.standard.stringArray(forKey: Self.classNamesKey) {
+            // Ensure we always have exactly 8 elements
+            if saved.count == 8 {
+                classNames = saved
+            } else {
+                // Pad or truncate to 8 elements
+                var adjusted = saved
+                while adjusted.count < 8 { adjusted.append("") }
+                classNames = Array(adjusted.prefix(8))
+            }
+            print("[ClassNames] Loaded: \(classNames.filter { !$0.isEmpty })")
+        }
+    }
+
+    /// Clear all class names
+    func clearClassNames() {
+        classNames = Array(repeating: "", count: 8)
+        print("[ClassNames] Cleared")
+    }
+
 }
 

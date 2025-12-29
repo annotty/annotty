@@ -3,20 +3,23 @@
 
 #include <simd/simd.h>
 
+/// Maximum number of annotation classes (1-8)
+#define MAX_CLASSES 8
+
 /// Uniforms passed to canvas shaders
 struct CanvasUniforms {
     /// Canvas transform matrix (pan/zoom/rotate)
     matrix_float3x3 transform;
     /// Inverse of transform matrix
     matrix_float3x3 inverseTransform;
-    /// Source image transparency (0.0 - 1.0)
-    float imageAlpha;
-    /// Mask overlay transparency (0.0 - 1.0)
-    float maskAlpha;
-    /// Padding to align maskColor to 16 bytes
-    simd_float2 _padding1;
-    /// Current annotation display color (RGBA)
-    simd_float4 maskColor;
+    /// Image contrast (0.0 - 2.0, 1.0 = normal)
+    float imageContrast;
+    /// Image brightness (-1.0 to 1.0, 0.0 = normal)
+    float imageBrightness;
+    /// Mask fill opacity (0.0 - 1.0, affects fill only, not edges)
+    float maskFillAlpha;
+    /// Padding for alignment
+    float _padding1;
     /// Viewport size in pixels
     simd_float2 canvasSize;
     /// Source image size in pixels
@@ -25,9 +28,10 @@ struct CanvasUniforms {
     simd_float2 maskSize;
     /// Scale factor from image to mask coordinates
     float maskScaleFactor;
-    /// Padding for 16-byte struct alignment
+    /// Padding for alignment
     float _padding2;
-    simd_float2 _padding3;
+    /// Class colors (index 0 unused, 1-8 = class colors)
+    simd_float4 classColors[MAX_CLASSES + 1];
 };
 
 /// Parameters for brush stamp compute shader

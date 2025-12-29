@@ -7,7 +7,7 @@ struct MainView: View {
     @StateObject private var viewModel = CanvasViewModel()
     @State private var showingExportSheet = false
     @State private var showingImagePicker = false
-    @State private var showingClassLimitAlert = false
+    @State private var showingImageSettings = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,6 +19,7 @@ struct MainView: View {
                 onPrevious: { viewModel.previousImage() },
                 onNext: { viewModel.nextImage() },
                 onGoTo: { index in viewModel.goToImage(index: index) },
+                onClear: { viewModel.clearAllAnnotations() },
                 onExport: { showingExportSheet = true },
                 onLoad: { showingImagePicker = true },
                 onReload: { viewModel.reloadImagesFromProject() }
@@ -30,31 +31,47 @@ struct MainView: View {
                 LeftPanelView(
                     brushRadius: $viewModel.brushRadius,
                     isPainting: $viewModel.isPainting,
-                    actualBrushSize: viewModel.brushPreviewSize
+                    actualBrushSize: viewModel.brushPreviewSize,
+                    annotationColor: viewModel.annotationColor
                 )
                 .frame(width: 80)
 
                 // Center - Canvas
                 CanvasContainerView(viewModel: viewModel)
 
-                // Right panel - Color, transparency, SAM
+                // Right panel - Color, settings button, SAM
                 RightPanelView(
                     annotationColor: $viewModel.annotationColor,
-                    imageTransparency: $viewModel.imageTransparency,
+                    isFillMode: $viewModel.isFillMode,
+                    classNames: viewModel.classNames,
+                    onSettingsTapped: {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            showingImageSettings = true
+                        }
+                    },
                     onSAMTapped: {
                         // SAM stub - no-op for MVP
                         print("SAM button tapped (stub)")
                     }
                 )
-                .frame(width: 100)
+                .frame(width: 120)
             }
         }
         .background(Color(white: 0.15))
         .ignoresSafeArea(.keyboard)
-        .alert("Class Limit Reached", isPresented: $showingClassLimitAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text("Maximum number of classes reached (8)")
+        .overlay {
+            // Image settings slide-in panel
+            if showingImageSettings {
+                ImageSettingsOverlayView(
+                    isPresented: $showingImageSettings,
+                    imageContrast: $viewModel.imageContrast,
+                    imageBrightness: $viewModel.imageBrightness,
+                    maskFillAlpha: $viewModel.maskFillAlpha,
+                    classNames: $viewModel.classNames,
+                    onClearClassNames: { viewModel.clearClassNames() }
+                )
+                .transition(.move(edge: .trailing))
+            }
         }
         .sheet(isPresented: $showingImagePicker) {
             ImagePickerView(
@@ -72,12 +89,6 @@ struct MainView: View {
         .sheet(isPresented: $showingExportSheet) {
             ExportSheetView(viewModel: viewModel)
         }
-        .onReceive(viewModel.$showClassLimitAlert) { show in
-            if show {
-                showingClassLimitAlert = true
-                viewModel.showClassLimitAlert = false
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             // Save when app goes to background
             viewModel.saveBeforeBackground()
@@ -91,6 +102,7 @@ struct LeftPanelView: View {
     @Binding var brushRadius: Float
     @Binding var isPainting: Bool
     var actualBrushSize: CGFloat  // Actual size considering zoom level
+    var annotationColor: Color    // Current annotation color
 
     /// Maximum display size for brush preview (in points)
     private let maxPreviewSize: CGFloat = 60
@@ -138,13 +150,13 @@ struct LeftPanelView: View {
                     .stroke(Color.gray.opacity(0.3), lineWidth: 1)
                     .frame(width: maxPreviewSize, height: maxPreviewSize)
 
-                // Actual brush size circle
+                // Actual brush size circle (uses annotation color when painting, red when erasing)
                 Circle()
-                    .fill(isPainting ? Color.green.opacity(0.5) : Color.red.opacity(0.5))
+                    .fill(isPainting ? annotationColor.opacity(0.5) : Color.red.opacity(0.5))
                     .frame(width: previewSize, height: previewSize)
 
                 Circle()
-                    .stroke(isPainting ? Color.green : Color.red, lineWidth: 2)
+                    .stroke(isPainting ? annotationColor : Color.red, lineWidth: 2)
                     .frame(width: previewSize, height: previewSize)
 
                 // Show scale indicator if brush is larger than preview

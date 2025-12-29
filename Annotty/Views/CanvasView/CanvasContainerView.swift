@@ -31,6 +31,30 @@ struct CanvasContainerView: View {
                         .position(viewModel.lastDrawPoint)
                         .allowsHitTesting(false)
                 }
+
+                // Fill mode indicator overlay
+                if viewModel.isFillMode {
+                    Rectangle()
+                        .fill(Color.cyan.opacity(0.05))
+                        .allowsHitTesting(false)
+
+                    // Fill mode badge
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Text("Fill Mode")
+                                .font(.caption)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.cyan.opacity(0.8))
+                                .foregroundColor(.white)
+                                .cornerRadius(4)
+                                .padding(8)
+                        }
+                        Spacer()
+                    }
+                    .allowsHitTesting(false)
+                }
             }
             .onAppear {
                 viewModel.updateViewSize(geometry.size)

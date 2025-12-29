@@ -5,6 +5,9 @@ import CoreGraphics
 import UIKit
 
 /// Manages Metal textures for images and masks
+/// Uses single mask texture with class IDs encoded as pixel values:
+/// - 0 = no mask (background)
+/// - 1-8 = class ID (matches currentClassID directly)
 class TextureManager {
     private let device: MTLDevice
     private let textureLoader: MTKTextureLoader
@@ -12,8 +15,8 @@ class TextureManager {
     /// Currently loaded source image texture
     private(set) var imageTexture: MTLTexture?
 
-    /// Mask textures by class ID
-    private(set) var maskTextures: [Int: MTLTexture] = [:]
+    /// Single mask texture with class IDs (0=none, 1-8=classID)
+    private(set) var maskTexture: MTLTexture?
 
     /// Source image size
     private(set) var imageSize: CGSize = .zero
@@ -27,8 +30,8 @@ class TextureManager {
     /// Maximum mask dimension
     static let maxMaskDimension = 4096
 
-    /// Maximum number of classes
-    static let maxClasses = MaskClass.maxClasses
+    /// Maximum number of classes (1-8)
+    static let maxClasses = 8
 
     init(device: MTLDevice) {
         self.device = device
@@ -103,15 +106,15 @@ class TextureManager {
 
         imageTexture = texture
 
-        // Clear existing mask textures
-        maskTextures.removeAll()
+        // Create new mask texture for this image
+        maskTexture = try createMaskTexture()
     }
 
-    // MARK: - Mask Textures
+    // MARK: - Mask Texture
 
-    /// Create or get mask texture for a class
-    func getMaskTexture(for classID: Int) throws -> MTLTexture {
-        if let existing = maskTextures[classID] {
+    /// Get the mask texture (creates if needed)
+    func getMaskTexture() throws -> MTLTexture {
+        if let existing = maskTexture {
             return existing
         }
 
@@ -120,13 +123,8 @@ class TextureManager {
             throw TextureError.noImageLoaded
         }
 
-        // Check class limit
-        guard maskTextures.count < Self.maxClasses else {
-            throw TextureError.maxClassesReached
-        }
-
         let texture = try createMaskTexture()
-        maskTextures[classID] = texture
+        maskTexture = texture
         return texture
     }
 
@@ -167,8 +165,8 @@ class TextureManager {
     }
 
     /// Upload mask data to texture
-    func uploadMask(_ data: [UInt8], to classID: Int) throws {
-        let texture = try getMaskTexture(for: classID)
+    func uploadMask(_ data: [UInt8]) throws {
+        let texture = try getMaskTexture()
 
         guard data.count == Int(maskSize.width) * Int(maskSize.height) else {
             throw TextureError.invalidMaskData
@@ -187,8 +185,8 @@ class TextureManager {
     }
 
     /// Read mask data from texture
-    func readMask(from classID: Int) -> [UInt8]? {
-        guard let texture = maskTextures[classID] else { return nil }
+    func readMask() -> [UInt8]? {
+        guard let texture = maskTexture else { return nil }
 
         let width = texture.width
         let height = texture.height
@@ -208,8 +206,8 @@ class TextureManager {
     }
 
     /// Read a region from mask texture (for undo patches)
-    func readMaskRegion(from classID: Int, bbox: CGRect) -> Data? {
-        guard let texture = maskTextures[classID] else { return nil }
+    func readMaskRegion(bbox: CGRect) -> Data? {
+        guard let texture = maskTexture else { return nil }
 
         // Use floor for min and ceil for max to ensure we capture all affected pixels
         let minX = max(0, Int(floor(bbox.minX)))
@@ -238,8 +236,8 @@ class TextureManager {
     }
 
     /// Write a region to mask texture (for undo restore)
-    func writeMaskRegion(to classID: Int, bbox: CGRect, data: Data) {
-        guard let texture = maskTextures[classID] else { return }
+    func writeMaskRegion(bbox: CGRect, data: Data) {
+        guard let texture = maskTexture else { return }
 
         // Use floor for min and ceil for max to match readMaskRegion
         let minX = max(0, Int(floor(bbox.minX)))
@@ -266,15 +264,27 @@ class TextureManager {
         }
     }
 
-    /// Remove mask texture for a class
-    func removeMaskTexture(for classID: Int) {
-        maskTextures.removeValue(forKey: classID)
+    /// Clear the mask texture
+    func clearMask() {
+        guard let texture = maskTexture else { return }
+
+        let byteCount = texture.width * texture.height
+        var zeros = [UInt8](repeating: 0, count: byteCount)
+        texture.replace(
+            region: MTLRegion(
+                origin: MTLOrigin(x: 0, y: 0, z: 0),
+                size: MTLSize(width: texture.width, height: texture.height, depth: 1)
+            ),
+            mipmapLevel: 0,
+            withBytes: &zeros,
+            bytesPerRow: texture.width
+        )
     }
 
     /// Clear all textures
     func clear() {
         imageTexture = nil
-        maskTextures.removeAll()
+        maskTexture = nil
         imageSize = .zero
         maskSize = .zero
     }
@@ -285,7 +295,6 @@ class TextureManager {
 enum TextureError: Error, LocalizedError {
     case invalidImage
     case textureCreationFailed
-    case maxClassesReached
     case invalidMaskData
     case noImageLoaded
 
@@ -295,8 +304,6 @@ enum TextureError: Error, LocalizedError {
             return "Failed to load image"
         case .textureCreationFailed:
             return "Failed to create Metal texture"
-        case .maxClassesReached:
-            return "Maximum number of classes reached (8)"
         case .invalidMaskData:
             return "Invalid mask data size"
         case .noImageLoaded:

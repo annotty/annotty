@@ -53,8 +53,50 @@ float2 transformUV(float2 uv, float2 canvasSize, float2 imageSize, matrix_float3
     return imagePos / imageSize;
 }
 
+/// Check if pixel is on the edge of a mask region
+/// Returns true if any of the 8 neighbors has a different class ID
+bool isEdgePixel(texture2d<uint, access::read> maskTexture, uint2 coord, uint classID) {
+    uint width = maskTexture.get_width();
+    uint height = maskTexture.get_height();
+
+    // Check 8 neighbors
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) continue;
+
+            int nx = int(coord.x) + dx;
+            int ny = int(coord.y) + dy;
+
+            // Boundary check
+            if (nx < 0 || nx >= int(width) || ny < 0 || ny >= int(height)) {
+                // Edge of texture counts as edge
+                return true;
+            }
+
+            uint neighborClass = maskTexture.read(uint2(nx, ny)).r;
+            if (neighborClass != classID) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// Apply contrast and brightness to a color
+float4 applyContrastBrightness(float4 color, float contrast, float brightness) {
+    // Contrast: scale around 0.5 (mid-gray)
+    float3 adjusted = (color.rgb - 0.5) * contrast + 0.5;
+    // Brightness: simple offset
+    adjusted = adjusted + brightness;
+    // Clamp to valid range
+    adjusted = clamp(adjusted, 0.0, 1.0);
+    return float4(adjusted, color.a);
+}
+
 /// Canvas compositing fragment shader
-/// Blends source image with mask overlay
+/// Blends source image with mask overlay using class colors
+/// Mask values: 0 = no mask, 1-8 = class ID (matches currentClassID)
+/// Edge pixels are always opaque, fill pixels use maskFillAlpha
 fragment float4 canvasFragment(FragmentIn in [[stage_in]],
                                 texture2d<float, access::sample> imageTexture [[texture(TextureIndexImage)]],
                                 texture2d<uint, access::read> maskTexture [[texture(TextureIndexMask)]],
@@ -74,6 +116,9 @@ fragment float4 canvasFragment(FragmentIn in [[stage_in]],
     // Sample source image with bilinear filtering
     float4 imageColor = imageTexture.sample(linearSampler, imageUV);
 
+    // Apply contrast and brightness to image
+    imageColor = applyContrastBrightness(imageColor, uniforms.imageContrast, uniforms.imageBrightness);
+
     // Calculate mask UV (scaled by maskScaleFactor)
     float2 maskUV = imageUV * float2(uniforms.maskSize);
     uint2 maskCoord = uint2(maskUV);
@@ -81,18 +126,24 @@ fragment float4 canvasFragment(FragmentIn in [[stage_in]],
     // Clamp to mask bounds
     maskCoord = min(maskCoord, uint2(uniforms.maskSize) - 1);
 
-    // Sample mask with nearest neighbor (read directly)
-    uint maskValue = maskTexture.read(maskCoord).r;
+    // Sample mask - value is class ID (0 = none, 1-8 = class)
+    uint classID = maskTexture.read(maskCoord).r;
 
-    // Apply wash-out effect: blend toward white as imageAlpha decreases
-    // This makes the image appear faded/washed out rather than darkened
-    float4 white = float4(1.0, 1.0, 1.0, 1.0);
-    float4 result = mix(white, imageColor, uniforms.imageAlpha);
-    result.a = 1.0; // Keep full opacity for the composited result
+    // Start with adjusted image
+    float4 result = imageColor;
+    result.a = 1.0;
 
-    if (maskValue > 0) {
-        // Blend mask color over image (mask stays at full color, not washed out)
-        float4 maskOverlay = float4(uniforms.maskColor.rgb, uniforms.maskAlpha);
+    // If there's a class at this pixel, blend its color
+    if (classID > 0 && classID <= MAX_CLASSES) {
+        float4 classColor = uniforms.classColors[classID];
+
+        // Check if this is an edge pixel
+        bool isEdge = isEdgePixel(maskTexture, maskCoord, classID);
+
+        // Edge pixels are always fully opaque, fill pixels use maskFillAlpha
+        float alpha = isEdge ? 1.0 : uniforms.maskFillAlpha;
+
+        float4 maskOverlay = float4(classColor.rgb, alpha);
         result = mix(result, maskOverlay, maskOverlay.a);
     }
 
