@@ -16,10 +16,10 @@ struct CanvasUniforms {
     float imageContrast;
     /// Image brightness (-1.0 to 1.0, 0.0 = normal)
     float imageBrightness;
-    /// Mask fill opacity (0.0 - 1.0, affects fill only, not edges)
+    /// Mask fill opacity (0.0 - 1.0, affects interior fill)
     float maskFillAlpha;
-    /// Padding for alignment
-    float _padding1;
+    /// Mask edge opacity (0.0 - 1.0, affects edge/outline)
+    float maskEdgeAlpha;
     /// Viewport size in pixels
     simd_float2 canvasSize;
     /// Source image size in pixels

@@ -82,10 +82,17 @@ class CanvasViewModel: ObservableObject {
         }
     }
 
-    /// Mask fill opacity (0.0 - 1.0, affects fill only, edges stay opaque)
+    /// Mask fill opacity (0.0 - 1.0, affects interior fill)
     @Published var maskFillAlpha: Float = 0.5 {
         didSet {
             renderer?.maskFillAlpha = maskFillAlpha
+        }
+    }
+
+    /// Mask edge opacity (0.0 - 1.0, affects edge/outline)
+    @Published var maskEdgeAlpha: Float = 1.0 {
+        didSet {
+            renderer?.maskEdgeAlpha = maskEdgeAlpha
         }
     }
 

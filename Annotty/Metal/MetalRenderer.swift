@@ -23,8 +23,10 @@ class MetalRenderer: NSObject, ObservableObject {
     @Published var imageContrast: Float = 1.0
     /// Image brightness (-1.0 to 1.0, 0.0 = normal)
     @Published var imageBrightness: Float = 0.0
-    /// Mask fill opacity (0.0 - 1.0, affects fill only, not edges)
+    /// Mask fill opacity (0.0 - 1.0, affects interior fill)
     @Published var maskFillAlpha: Float = 0.5
+    /// Mask edge opacity (0.0 - 1.0, affects edge/outline)
+    @Published var maskEdgeAlpha: Float = 1.0
 
     /// Class colors for rendering (index 0 unused, 1-8 = class colors)
     /// Default: red, orange, yellow, green, cyan, blue, purple, pink
@@ -184,7 +186,7 @@ class MetalRenderer: NSObject, ObservableObject {
             imageContrast: imageContrast,
             imageBrightness: imageBrightness,
             maskFillAlpha: maskFillAlpha,
-            _padding1: 0,
+            maskEdgeAlpha: maskEdgeAlpha,
             canvasSize: simd_float2(Float(viewportSize.width), Float(viewportSize.height)),
             imageSize: simd_float2(Float(textureManager.imageSize.width), Float(textureManager.imageSize.height)),
             maskSize: simd_float2(Float(textureManager.maskSize.width), Float(textureManager.maskSize.height)),
@@ -377,10 +379,10 @@ struct CanvasUniforms {
     var imageContrast: Float
     /// Image brightness (-1.0 to 1.0, 0.0 = normal)
     var imageBrightness: Float
-    /// Mask fill opacity (0.0 - 1.0, affects fill only, not edges)
+    /// Mask fill opacity (0.0 - 1.0, affects interior fill)
     var maskFillAlpha: Float
-    /// Padding for alignment
-    var _padding1: Float
+    /// Mask edge opacity (0.0 - 1.0, affects edge/outline)
+    var maskEdgeAlpha: Float
     var canvasSize: simd_float2
     var imageSize: simd_float2
     var maskSize: simd_float2

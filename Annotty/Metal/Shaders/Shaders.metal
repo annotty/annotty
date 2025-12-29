@@ -140,8 +140,8 @@ fragment float4 canvasFragment(FragmentIn in [[stage_in]],
         // Check if this is an edge pixel
         bool isEdge = isEdgePixel(maskTexture, maskCoord, classID);
 
-        // Edge pixels are always fully opaque, fill pixels use maskFillAlpha
-        float alpha = isEdge ? 1.0 : uniforms.maskFillAlpha;
+        // Edge pixels use maskEdgeAlpha, fill pixels use maskFillAlpha
+        float alpha = isEdge ? uniforms.maskEdgeAlpha : uniforms.maskFillAlpha;
 
         float4 maskOverlay = float4(classColor.rgb, alpha);
         result = mix(result, maskOverlay, maskOverlay.a);

@@ -68,6 +68,7 @@ struct MainView: View {
                     imageContrast: $viewModel.imageContrast,
                     imageBrightness: $viewModel.imageBrightness,
                     maskFillAlpha: $viewModel.maskFillAlpha,
+                    maskEdgeAlpha: $viewModel.maskEdgeAlpha,
                     classNames: $viewModel.classNames,
                     onClearClassNames: { viewModel.clearClassNames() }
                 )

@@ -7,6 +7,7 @@ struct ImageSettingsOverlayView: View {
     @Binding var imageContrast: Float
     @Binding var imageBrightness: Float
     @Binding var maskFillAlpha: Float
+    @Binding var maskEdgeAlpha: Float
     @Binding var classNames: [String]
     var onClearClassNames: () -> Void
 
@@ -78,6 +79,14 @@ struct ImageSettingsOverlayView: View {
                         SettingsSliderView(
                             title: "Mask Fill",
                             value: $maskFillAlpha,
+                            range: 0...1,
+                            displayFormatter: { Int($0 * 100) },
+                            displaySuffix: "%"
+                        )
+
+                        SettingsSliderView(
+                            title: "Edge Fill",
+                            value: $maskEdgeAlpha,
                             range: 0...1,
                             displayFormatter: { Int($0 * 100) },
                             displaySuffix: "%"
@@ -163,6 +172,7 @@ struct ImageSettingsOverlayView: View {
             imageContrast = 1.0
             imageBrightness = 0.0
             maskFillAlpha = 0.5
+            maskEdgeAlpha = 1.0
         }
     }
 }
@@ -251,6 +261,7 @@ struct SettingsSliderView: View {
             imageContrast: .constant(1.0),
             imageBrightness: .constant(0.0),
             maskFillAlpha: .constant(0.5),
+            maskEdgeAlpha: .constant(1.0),
             classNames: .constant(["iris", "eyelid", "sclera", "pupil", "", "", "", ""]),
             onClearClassNames: {}
         )
