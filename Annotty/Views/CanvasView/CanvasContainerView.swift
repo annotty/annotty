@@ -55,6 +55,32 @@ struct CanvasContainerView: View {
                     }
                     .allowsHitTesting(false)
                 }
+
+                // SAM mode indicator overlay
+                if viewModel.isSAMMode {
+                    // SAM mode badge
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Text("SAM: Tap or Drag")
+                                .font(.caption)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.cyan.opacity(0.8))
+                                .foregroundColor(.white)
+                                .cornerRadius(4)
+                                .padding(8)
+                        }
+                        Spacer()
+                    }
+                    .allowsHitTesting(false)
+                }
+
+                // SAM bbox drawing overlay
+                if let start = viewModel.samBBoxStart, let end = viewModel.samBBoxEnd {
+                    SAMBBoxOverlay(start: start, end: end)
+                        .allowsHitTesting(false)
+                }
             }
             .onAppear {
                 viewModel.updateViewSize(geometry.size)

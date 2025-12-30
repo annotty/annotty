@@ -51,8 +51,23 @@ class GestureCoordinator: NSObject {
     /// Called when fill tap triggered (single tap in fill mode)
     var onFillTap: ((CGPoint) -> Void)?
 
+    /// Called when SAM tap triggered (single tap in SAM mode)
+    var onSAMTap: ((CGPoint) -> Void)?
+
+    /// Called when SAM bbox drag starts
+    var onSAMBBoxStart: ((CGPoint) -> Void)?
+
+    /// Called when SAM bbox drag continues (provides start and current points)
+    var onSAMBBoxDrag: ((CGPoint, CGPoint) -> Void)?
+
+    /// Called when SAM bbox drag ends (provides start and end points)
+    var onSAMBBoxEnd: ((CGPoint, CGPoint) -> Void)?
+
     /// Whether fill mode is active
     var isFillMode: Bool = false
+
+    /// Whether SAM mode is active (for point prompt segmentation)
+    var isSAMMode: Bool = false
 
     // MARK: - State
 
@@ -63,7 +78,11 @@ class GestureCoordinator: NSObject {
     private var currentTouchCount = 0
     private var lastPinchScale: CGFloat = 1.0
     private var drawingInputType: InputType = .finger
-    private var touchStartPoint: CGPoint = .zero  // For fill tap detection
+    private var touchStartPoint: CGPoint = .zero  // For fill/SAM tap detection
+    private var isSAMBBoxDragging = false  // Whether currently dragging a SAM bbox
+
+    /// Threshold to distinguish tap from drag (in points)
+    private let samDragThreshold: CGFloat = 20
 
     // MARK: - Gesture Recognizers
 
@@ -142,11 +161,11 @@ class GestureCoordinator: NSObject {
         let inputType = classifyTouch(touch)
         let location = touch.location(in: view)
 
-        // Record start point for fill tap detection
+        // Record start point for fill/SAM tap detection
         touchStartPoint = location
 
-        // In fill mode, wait for tap (handled in touchesEnded)
-        if isFillMode {
+        // In fill mode or SAM mode, wait for tap (handled in touchesEnded)
+        if isFillMode || isSAMMode {
             return
         }
 
@@ -184,11 +203,29 @@ class GestureCoordinator: NSObject {
         // If 2+ fingers detected during drawing, cancel
         if currentTouchCount >= 2 {
             cancelPendingAndOngoingStroke()
+            isSAMBBoxDragging = false
             return
         }
 
         guard let touch = touches.first else { return }
         let location = touch.location(in: view)
+
+        // SAM mode: handle bbox dragging
+        if isSAMMode {
+            let distance = hypot(location.x - touchStartPoint.x, location.y - touchStartPoint.y)
+
+            if !isSAMBBoxDragging && distance >= samDragThreshold {
+                // Start bbox dragging
+                isSAMBBoxDragging = true
+                onSAMBBoxStart?(touchStartPoint)
+            }
+
+            if isSAMBBoxDragging {
+                // Continue bbox dragging
+                onSAMBBoxDrag?(touchStartPoint, location)
+            }
+            return
+        }
 
         if isPendingDraw {
             // Still waiting for 32ms delay - update pending point
@@ -217,6 +254,22 @@ class GestureCoordinator: NSObject {
             return
         }
 
+        // SAM mode: detect tap or bbox drag
+        if isSAMMode {
+            if isSAMBBoxDragging {
+                // End bbox dragging
+                onSAMBBoxEnd?(touchStartPoint, location)
+                isSAMBBoxDragging = false
+            } else {
+                // Tap for point prompt
+                let distance = hypot(location.x - touchStartPoint.x, location.y - touchStartPoint.y)
+                if distance < samDragThreshold {
+                    onSAMTap?(location)
+                }
+            }
+            return
+        }
+
         if isPendingDraw {
             // Touch ended before 32ms delay - cancel pending
             cancelPendingDraw()
@@ -230,6 +283,7 @@ class GestureCoordinator: NSObject {
     /// Handle touch cancelled
     func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?, in view: UIView) {
         currentTouchCount = 0
+        isSAMBBoxDragging = false
         cancelPendingAndOngoingStroke()
     }
 

@@ -1,13 +1,14 @@
 import SwiftUI
 
 /// Slide-in overlay panel for image and mask settings
-/// Contains contrast, brightness, mask opacity, and class name editing
+/// Contains contrast, brightness, mask opacity, SAM model selection, and class name editing
 struct ImageSettingsOverlayView: View {
     @Binding var isPresented: Bool
     @Binding var imageContrast: Float
     @Binding var imageBrightness: Float
     @Binding var maskFillAlpha: Float
     @Binding var maskEdgeAlpha: Float
+    @Binding var selectedSAMModel: SAMModelType
     @Binding var classNames: [String]
     var onClearClassNames: () -> Void
 
@@ -106,6 +107,61 @@ struct ImageSettingsOverlayView: View {
                             .cornerRadius(6)
                         }
                         .buttonStyle(.plain)
+                    }
+
+                    Divider()
+                        .background(Color.gray.opacity(0.5))
+                        .padding(.horizontal, 16)
+
+                    // SAM Model section
+                    VStack(spacing: 12) {
+                        Text("SAM Model")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+
+                        VStack(spacing: 8) {
+                            ForEach(SAMModelType.allCases) { modelType in
+                                Button(action: {
+                                    selectedSAMModel = modelType
+                                }) {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(modelType.displayName)
+                                                .font(.caption)
+                                                .foregroundColor(.white)
+                                            Text(modelType.description)
+                                                .font(.caption2)
+                                                .foregroundColor(.gray)
+                                        }
+                                        Spacer()
+                                        if selectedSAMModel == modelType {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .foregroundColor(.cyan)
+                                        }
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(selectedSAMModel == modelType ? Color.cyan.opacity(0.2) : Color(white: 0.2))
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .stroke(selectedSAMModel == modelType ? Color.cyan : Color.clear, lineWidth: 1)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+
+                        Text("Model change takes effect on next SAM activation")
+                            .font(.caption2)
+                            .foregroundColor(.gray.opacity(0.7))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
                     }
 
                     Divider()
@@ -262,6 +318,7 @@ struct SettingsSliderView: View {
             imageBrightness: .constant(0.0),
             maskFillAlpha: .constant(0.5),
             maskEdgeAlpha: .constant(1.0),
+            selectedSAMModel: .constant(.tiny),
             classNames: .constant(["iris", "eyelid", "sclera", "pupil", "", "", "", ""]),
             onClearClassNames: {}
         )

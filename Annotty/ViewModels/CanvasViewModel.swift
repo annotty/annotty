@@ -21,8 +21,39 @@ class CanvasViewModel: ObservableObject {
     @Published var isFillMode: Bool = false {
         didSet {
             gestureCoordinator.isFillMode = isFillMode
+            // Disable SAM mode when fill mode is enabled
+            if isFillMode && isSAMMode {
+                isSAMMode = false
+            }
         }
     }
+
+    /// SAM mode for point prompt segmentation
+    @Published var isSAMMode: Bool = false {
+        didSet {
+            gestureCoordinator.isSAMMode = isSAMMode
+            // Disable fill mode when SAM mode is enabled
+            if isSAMMode && isFillMode {
+                isFillMode = false
+            }
+        }
+    }
+
+    /// SAM processing state (during inference)
+    @Published private(set) var isSAMProcessing: Bool = false
+
+    /// SAM model loading state (initial model load)
+    @Published private(set) var isSAMLoading: Bool = false
+
+    /// Selected SAM model type (Tiny or Small)
+    @Published var selectedSAMModel: SAMModelType = .tiny
+
+    /// SAM bbox dragging state for UI overlay
+    @Published var samBBoxStart: CGPoint?
+    @Published var samBBoxEnd: CGPoint?
+
+    /// SAM service for segmentation
+    let samService = SAM2Service()
     @Published var lastDrawPoint: CGPoint = .zero
     @Published var currentScale: CGFloat = 1.0  // Current zoom level for UI updates
 
@@ -290,6 +321,36 @@ class CanvasViewModel: ObservableObject {
             // Auto-disable fill mode after fill
             self?.isFillMode = false
         }
+
+        // SAM point tap callback
+        gestureCoordinator.onSAMTap = { [weak self] point in
+            guard let self = self else { return }
+            Task { @MainActor in
+                await self.performSAMPrediction(at: point)
+            }
+        }
+
+        // SAM bbox callbacks
+        gestureCoordinator.onSAMBBoxStart = { [weak self] startPoint in
+            self?.samBBoxStart = startPoint
+            self?.samBBoxEnd = startPoint
+        }
+
+        gestureCoordinator.onSAMBBoxDrag = { [weak self] startPoint, currentPoint in
+            self?.samBBoxStart = startPoint
+            self?.samBBoxEnd = currentPoint
+        }
+
+        gestureCoordinator.onSAMBBoxEnd = { [weak self] startPoint, endPoint in
+            guard let self = self else { return }
+            // Clear bbox UI
+            self.samBBoxStart = nil
+            self.samBBoxEnd = nil
+            // Perform prediction
+            Task { @MainActor in
+                await self.performSAMBBoxPrediction(start: startPoint, end: endPoint)
+            }
+        }
     }
 
     private func setupBindings() {
@@ -430,6 +491,9 @@ class CanvasViewModel: ObservableObject {
     private func loadCurrentImage() {
         guard let item = imageManager.currentItem else { return }
         loadImage(from: item.url)
+
+        // Clear SAM cache when loading new image
+        clearSAMCache()
 
         // Always check for annotation file dynamically (not just cached URL)
         // This ensures newly saved annotations are detected
@@ -1190,5 +1254,245 @@ class CanvasViewModel: ObservableObject {
         print("[ClassNames] Cleared")
     }
 
+    // MARK: - SAM Integration
+
+    /// Toggle SAM mode and load models if needed
+    func toggleSAMMode() {
+        if !isSAMMode {
+            // Entering SAM mode
+            Task { @MainActor in
+                do {
+                    // Load models if not ready or if model type changed
+                    let needsReload = !samService.isReady || samService.currentModelType != selectedSAMModel
+                    if needsReload {
+                        isSAMLoading = true
+                        print("[SAM] Loading \(selectedSAMModel.displayName) models...")
+                        try await samService.loadModels(modelType: selectedSAMModel)
+                        isSAMLoading = false
+                    }
+
+                    // Encode current image
+                    isSAMProcessing = true
+                    if let imageItem = imageManager.currentItem,
+                       let imageData = try? Data(contentsOf: imageItem.url),
+                       let uiImage = UIImage(data: imageData),
+                       let cgImage = uiImage.cgImage {
+                        try await samService.encodeImage(cgImage)
+                    }
+                    isSAMProcessing = false
+
+                    isSAMMode = true
+                    print("[SAM] Mode enabled with \(selectedSAMModel.displayName)")
+                } catch {
+                    isSAMLoading = false
+                    isSAMProcessing = false
+                    print("[SAM] Failed to initialize: \(error)")
+                }
+            }
+        } else {
+            // Exiting SAM mode
+            isSAMMode = false
+            print("[SAM] Mode disabled")
+        }
+    }
+
+    /// Perform SAM prediction at the given touch point
+    private func performSAMPrediction(at touchPoint: CGPoint) async {
+        guard samService.isReady else {
+            print("[SAM] Service not ready")
+            return
+        }
+
+        guard let renderer = renderer else {
+            print("[SAM] No renderer")
+            return
+        }
+
+        isSAMProcessing = true
+        defer { isSAMProcessing = false }
+
+        // Convert touch point to normalized image coordinates (0-1)
+        let screenPoint = renderer.convertTouchToScreen(touchPoint)
+        let imagePoint = renderer.canvasTransform.screenToImage(screenPoint)
+
+        // Get original image size
+        let imageSize = renderer.textureManager.imageSize
+        guard imageSize.width > 0 && imageSize.height > 0 else {
+            print("[SAM] Invalid image size")
+            return
+        }
+
+        // Normalize to 0-1
+        let normalizedPoint = CGPoint(
+            x: imagePoint.x / imageSize.width,
+            y: imagePoint.y / imageSize.height
+        )
+
+        // Check bounds
+        guard normalizedPoint.x >= 0 && normalizedPoint.x <= 1 &&
+              normalizedPoint.y >= 0 && normalizedPoint.y <= 1 else {
+            print("[SAM] Point out of image bounds: \(normalizedPoint)")
+            return
+        }
+
+        print("[SAM] Predicting at normalized point: (\(String(format: "%.3f", normalizedPoint.x)), \(String(format: "%.3f", normalizedPoint.y)))")
+
+        do {
+            let result = try await samService.predictFromPoint(point: normalizedPoint)
+            print("[SAM] Prediction complete, score: \(String(format: "%.3f", result.score))")
+
+            // Apply mask to texture
+            applySAMMask(result.mask, size: result.size)
+
+            // Auto-disable SAM mode after prediction (like fill mode)
+            isSAMMode = false
+        } catch {
+            print("[SAM] Prediction failed: \(error)")
+        }
+    }
+
+    /// Perform SAM bbox prediction at the given screen coordinates
+    private func performSAMBBoxPrediction(start: CGPoint, end: CGPoint) async {
+        guard samService.isReady else {
+            print("[SAM] Service not ready")
+            return
+        }
+
+        guard let renderer = renderer else {
+            print("[SAM] No renderer")
+            return
+        }
+
+        isSAMProcessing = true
+        defer { isSAMProcessing = false }
+
+        // Convert touch points to image coordinates
+        let screenStart = renderer.convertTouchToScreen(start)
+        let screenEnd = renderer.convertTouchToScreen(end)
+        let imageStart = renderer.canvasTransform.screenToImage(screenStart)
+        let imageEnd = renderer.canvasTransform.screenToImage(screenEnd)
+
+        // Get original image size
+        let imageSize = renderer.textureManager.imageSize
+        guard imageSize.width > 0 && imageSize.height > 0 else {
+            print("[SAM] Invalid image size")
+            return
+        }
+
+        // Normalize to 0-1 and ensure proper bbox orientation (top-left, bottom-right)
+        let normalizedStart = CGPoint(
+            x: imageStart.x / imageSize.width,
+            y: imageStart.y / imageSize.height
+        )
+        let normalizedEnd = CGPoint(
+            x: imageEnd.x / imageSize.width,
+            y: imageEnd.y / imageSize.height
+        )
+
+        // Ensure top-left and bottom-right ordering
+        let topLeft = CGPoint(
+            x: min(normalizedStart.x, normalizedEnd.x),
+            y: min(normalizedStart.y, normalizedEnd.y)
+        )
+        let bottomRight = CGPoint(
+            x: max(normalizedStart.x, normalizedEnd.x),
+            y: max(normalizedStart.y, normalizedEnd.y)
+        )
+
+        // Check bounds and minimum size
+        guard topLeft.x >= 0 && bottomRight.x <= 1 &&
+              topLeft.y >= 0 && bottomRight.y <= 1 else {
+            print("[SAM] BBox out of image bounds")
+            return
+        }
+
+        let bboxWidth = bottomRight.x - topLeft.x
+        let bboxHeight = bottomRight.y - topLeft.y
+        guard bboxWidth > 0.01 && bboxHeight > 0.01 else {
+            print("[SAM] BBox too small")
+            return
+        }
+
+        print("[SAM] Predicting from BBox: (\(String(format: "%.3f", topLeft.x)), \(String(format: "%.3f", topLeft.y))) - (\(String(format: "%.3f", bottomRight.x)), \(String(format: "%.3f", bottomRight.y)))")
+
+        do {
+            let result = try await samService.predictFromBBox(topLeft: topLeft, bottomRight: bottomRight)
+            print("[SAM] BBox prediction complete, score: \(String(format: "%.3f", result.score))")
+
+            // Apply mask to texture
+            applySAMMask(result.mask, size: result.size)
+
+            // Auto-disable SAM mode after prediction
+            isSAMMode = false
+        } catch {
+            print("[SAM] BBox prediction failed: \(error)")
+        }
+    }
+
+    /// Apply SAM mask result to the current mask texture
+    private func applySAMMask(_ samMask: [UInt8], size: CGSize) {
+        guard let textureManager = renderer?.textureManager else {
+            print("[SAM] No texture manager")
+            return
+        }
+
+        // SAM mask is at original image resolution
+        // Need to scale to mask resolution (2x)
+        let maskWidth = Int(textureManager.maskSize.width)
+        let maskHeight = Int(textureManager.maskSize.height)
+        let samWidth = Int(size.width)
+        let samHeight = Int(size.height)
+
+        // Get current mask data for undo
+        guard let currentMaskData = textureManager.readMask() else {
+            print("[SAM] Failed to read current mask")
+            return
+        }
+
+        // Create undo action
+        let bbox = CGRect(x: 0, y: 0, width: CGFloat(maskWidth), height: CGFloat(maskHeight))
+        let previousPatch = Data(currentMaskData)
+        let action = UndoAction(classID: currentClassID, bbox: bbox, previousPatch: previousPatch)
+        undoManager.pushUndo(action)
+
+        // Scale SAM mask to texture mask size
+        var newMaskData = currentMaskData  // Start with current mask
+
+        let scaleX = Float(samWidth) / Float(maskWidth)
+        let scaleY = Float(samHeight) / Float(maskHeight)
+
+        // Apply SAM mask (only to empty areas - preserve existing mask)
+        for y in 0..<maskHeight {
+            for x in 0..<maskWidth {
+                let srcX = Int(Float(x) * scaleX)
+                let srcY = Int(Float(y) * scaleY)
+
+                guard srcX < samWidth && srcY < samHeight else { continue }
+
+                let srcIdx = srcY * samWidth + srcX
+                let dstIdx = y * maskWidth + x
+
+                // Only paint if SAM predicts foreground AND no existing mask
+                if samMask[srcIdx] > 0 && newMaskData[dstIdx] == 0 {
+                    newMaskData[dstIdx] = UInt8(currentClassID)
+                }
+            }
+        }
+
+        // Upload to texture
+        do {
+            try textureManager.uploadMask(newMaskData)
+            print("[SAM] Mask applied with class \(currentClassID)")
+        } catch {
+            print("[SAM] Failed to upload mask: \(error)")
+        }
+    }
+
+    /// Clear SAM cache when image changes
+    func clearSAMCache() {
+        samService.clearCache()
+    }
+
 }
+
 

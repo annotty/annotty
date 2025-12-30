@@ -44,6 +44,9 @@ struct MainView: View {
                 RightPanelView(
                     annotationColor: $viewModel.annotationColor,
                     isFillMode: $viewModel.isFillMode,
+                    isSAMMode: $viewModel.isSAMMode,
+                    isSAMLoading: viewModel.isSAMLoading,
+                    isSAMProcessing: viewModel.isSAMProcessing,
                     classNames: viewModel.classNames,
                     onSettingsTapped: {
                         withAnimation(.easeInOut(duration: 0.25)) {
@@ -51,8 +54,7 @@ struct MainView: View {
                         }
                     },
                     onSAMTapped: {
-                        // SAM stub - no-op for MVP
-                        print("SAM button tapped (stub)")
+                        viewModel.toggleSAMMode()
                     }
                 )
                 .frame(width: 120)
@@ -69,10 +71,17 @@ struct MainView: View {
                     imageBrightness: $viewModel.imageBrightness,
                     maskFillAlpha: $viewModel.maskFillAlpha,
                     maskEdgeAlpha: $viewModel.maskEdgeAlpha,
+                    selectedSAMModel: $viewModel.selectedSAMModel,
                     classNames: $viewModel.classNames,
                     onClearClassNames: { viewModel.clearClassNames() }
                 )
                 .transition(.move(edge: .trailing))
+            }
+
+            // SAM loading overlay
+            if viewModel.isSAMLoading {
+                SAMLoadingOverlayView()
+                    .transition(.opacity)
             }
         }
         .sheet(isPresented: $showingImagePicker) {
@@ -185,6 +194,50 @@ struct LeftPanelView: View {
         }
         .frame(maxHeight: .infinity)
         .background(Color(white: 0.1))
+    }
+}
+
+// MARK: - SAM Loading Overlay
+
+struct SAMLoadingOverlayView: View {
+    var body: some View {
+        ZStack {
+            // Semi-transparent background
+            Color.black.opacity(0.6)
+                .ignoresSafeArea()
+
+            // Loading card
+            VStack(spacing: 20) {
+                // Animated icon
+                Image(systemName: "wand.and.stars")
+                    .font(.system(size: 48))
+                    .foregroundColor(.cyan)
+                    .symbolEffect(.pulse)
+
+                // Title
+                Text("Loading SAM")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+
+                // Progress indicator
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .cyan))
+                    .scaleEffect(1.2)
+
+                // Description
+                Text("Preparing AI segmentation model...")
+                    .font(.subheadline)
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(40)
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(Color(white: 0.15))
+                    .shadow(color: .black.opacity(0.3), radius: 20)
+            )
+        }
     }
 }
 

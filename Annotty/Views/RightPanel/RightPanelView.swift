@@ -4,6 +4,9 @@ import SwiftUI
 struct RightPanelView: View {
     @Binding var annotationColor: Color
     @Binding var isFillMode: Bool
+    @Binding var isSAMMode: Bool
+    let isSAMLoading: Bool
+    let isSAMProcessing: Bool
     let classNames: [String]
     let onSettingsTapped: () -> Void
     let onSAMTapped: () -> Void
@@ -25,6 +28,19 @@ struct RightPanelView: View {
     private func displayName(for index: Int) -> String {
         let name = classNames[index]
         return name.isEmpty ? "\(index + 1)" : name
+    }
+
+    /// SAM button label based on current state
+    private var samButtonLabel: String {
+        if isSAMLoading {
+            return "Loading..."
+        } else if isSAMProcessing {
+            return "Processing"
+        } else if isSAMMode {
+            return "Tap object"
+        } else {
+            return "SAM"
+        }
     }
 
     var body: some View {
@@ -119,22 +135,32 @@ struct RightPanelView: View {
 
             Spacer()
 
-            // SAM button (stub for MVP)
+            // SAM button
             Button(action: onSAMTapped) {
                 VStack(spacing: 4) {
-                    Image(systemName: "wand.and.stars")
-                        .font(.title2)
-                    Text("SAM")
+                    if isSAMLoading || isSAMProcessing {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(0.8)
+                            .frame(width: 24, height: 24)
+                    } else {
+                        Image(systemName: "wand.and.stars")
+                            .font(.title2)
+                    }
+                    Text(samButtonLabel)
                         .font(.caption)
                 }
-                .foregroundColor(.gray)
+                .foregroundColor(isSAMMode ? .cyan : .white)
                 .padding(12)
-                .background(Color(white: 0.2))
+                .background(isSAMMode ? Color.cyan.opacity(0.3) : Color(white: 0.2))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(isSAMMode ? Color.cyan : Color.clear, lineWidth: 2)
+                )
                 .cornerRadius(8)
             }
             .buttonStyle(.plain)
-            .disabled(true) // Disabled for MVP
-            .opacity(0.5)
+            .disabled(isSAMLoading || isSAMProcessing)
 
             Spacer()
                 .frame(height: 20)
@@ -150,6 +176,9 @@ struct RightPanelView: View {
     RightPanelView(
         annotationColor: .constant(Color(red: 1, green: 0, blue: 0)),
         isFillMode: .constant(false),
+        isSAMMode: .constant(false),
+        isSAMLoading: false,
+        isSAMProcessing: false,
         classNames: ["iris", "eyelid", "sclera", "pupil", "", "", "", ""],
         onSettingsTapped: {},
         onSAMTapped: {}
