@@ -12,7 +12,7 @@
 
 [Features](#features) • [Installation](#installation) • [Usage](#usage) • [Export Formats](#export-formats) • [Contributing](#contributing)
 
-![Annotty Screenshot](assets/screenshot.png)
+![Annotty Screenshot](assets/screenshot_crop_b.png)
 
 </div>
 
