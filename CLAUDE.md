@@ -4,142 +4,170 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Annoty is an iPad segmentation annotation app designed for machine learning data preparation. It provides a Procreate-like drawing experience using Apple Pencil for creating segmentation masks.
+Annotty is a professional iPad segmentation annotation app designed for machine learning data preparation. It provides an intuitive drawing experience using Apple Pencil for creating pixel-perfect segmentation masks.
 
-**Target Platform:** iPadOS (offline, Apple Pencil required)
-**Tech Stack:** SwiftUI + Metal + Swift Package Manager
+**Repository:** https://github.com/annotty/annotty
+**Target Platform:** iPadOS (Apple Pencil required)
+**Tech Stack:** SwiftUI + Metal (no external dependencies)
 
-**Core User Flow:** Open image → Paint/Erase → (Future: SAM refinement) → Undo if needed → Export annotation
+**Tagline:** Professional iPad annotation tool with Apple Pencil — intuitive drawing meets smart segmentation.
+
+## Current Status (2025-01)
+
+### Implemented Features
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| **Paint/Erase** | ✅ Complete | Apple Pencil drawing with adjustable brush size |
+| **Flood Fill** | ✅ Complete | One-tap fill for enclosed regions |
+| **Boundary Smoothing** | ✅ Complete | Competition-based moving average algorithm |
+| **SAM 2.1 Integration** | ✅ Complete | Point prompt and box prompt segmentation |
+| **Multi-class Support** | ✅ Complete | Up to 8 classes with custom names |
+| **Export** | ✅ Complete | PNG, COCO JSON, YOLO-seg formats |
+| **Undo/Redo** | ✅ Complete | 2-finger tap / 3-finger tap |
+| **Pan/Zoom/Rotate** | ✅ Complete | 2-finger gestures |
+
+### Architecture
+
+```
+User Input (Apple Pencil / Gestures)
+    ↓
+GestureCoordinator (Gestures/) → filters pencil vs finger input
+    ↓
+CanvasViewModel (ViewModels/) → state orchestration & tool logic
+    ↓
+MetalRenderer + TextureManager (Metal/) → GPU pipelines
+    ↓
+Shaders.metal → brush stamp, mask compositing
+    ↓
+Display (SwiftUI overlay + Metal rendering)
+```
+
+### Key Components
+
+| File | Purpose |
+|------|---------|
+| `CanvasViewModel.swift` | Main state coordinator: drawing, fill, smooth, SAM, undo/redo |
+| `MetalRenderer.swift` | Metal pipeline setup & rendering |
+| `TextureManager.swift` | GPU texture management for images & masks |
+| `GestureCoordinator.swift` | Input classification & gesture routing |
+| `CanvasTransform.swift` | Pan/zoom/rotation matrix with coordinate transforms |
+| `SAM2Service.swift` | SAM 2.1 CoreML inference service |
 
 ## Build & Development
 
 ```bash
 # Open in Xcode
-open Annoty.xcodeproj
+open Annotty.xcodeproj
 
 # Build from command line
-xcodebuild -scheme Annoty -destination 'platform=iOS Simulator,name=iPad Pro (12.9-inch)'
+xcodebuild -scheme Annotty -destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M5)'
 
 # Run tests
-xcodebuild test -scheme Annoty -destination 'platform=iOS Simulator,name=iPad Pro (12.9-inch)'
+xcodebuild test -scheme Annotty -destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M5)'
 ```
 
 ## Project Structure
 
 ```
-Annoty/
+Annotty/
 ├── App/                    # App entry point
-│   └── AnnotyApp.swift
-├── Models/                 # Data models
-│   ├── AnnotationProject.swift
-│   ├── ImageItem.swift
-│   ├── MaskClass.swift
-│   ├── InternalMask.swift
-│   ├── UndoAction.swift
-│   └── CanvasTransform.swift
-├── Views/                  # SwiftUI views
+├── Models/                 # Data models (CanvasTransform, UndoAction, etc.)
+├── Views/
 │   ├── MainView.swift
-│   ├── CanvasView/         # Metal canvas integration
-│   ├── LeftPanel/          # Thickness slider
-│   ├── RightPanel/         # Color, transparency, SAM
-│   ├── TopBar/             # Navigation, export
-│   └── Common/             # Shared components
-├── ViewModels/             # State management
-│   ├── CanvasViewModel.swift
+│   ├── CanvasView/         # MetalCanvasView, SmoothStrokeOverlay
+│   ├── LeftPanel/          # Brush size slider
+│   ├── RightPanel/         # Tools, colors, settings
+│   └── TopBar/             # Navigation, export
+├── ViewModels/
+│   ├── CanvasViewModel.swift  # Central state management
 │   └── UndoManager.swift
-├── Metal/                  # GPU rendering
+├── Metal/
 │   ├── MetalRenderer.swift
 │   ├── TextureManager.swift
 │   └── Shaders/
-│       ├── Shaders.metal
-│       └── ShaderTypes.h
-├── Gestures/               # Input handling
-│   ├── GestureCoordinator.swift
-│   └── DrawingCanvasView.swift
+├── Gestures/
+│   └── GestureCoordinator.swift
 ├── Services/
-│   ├── FileManager/        # Project files, auto-save
-│   ├── Export/             # PNG, COCO, YOLO exporters
-│   ├── ImageProcessing/    # Color parsing, contour extraction
-│   └── SAM/                # SAM stub (future)
-└── Utils/                  # Extensions
+│   ├── FileManager/        # Project I/O, auto-save
+│   ├── Export/             # PNG, COCO, YOLO
+│   ├── ImageProcessing/    # Color parsing, contours
+│   └── SAM/                # SAM 2.1 integration
+│       ├── SAM2Service.swift
+│       └── Models/         # CoreML models (.mlpackage)
+└── Utils/
 ```
 
-## App Folder Structure (Runtime)
+## Runtime Folder Structure
 
 ```
-AppRoot/
-├── images/        # Source images
-├── annotations/   # Editable color PNG masks (for visualization/editing)
-└── labels/        # Export output (PNG/COCO/YOLO for ML training)
+YourProject/
+├── images/          # Source images (PNG, JPG)
+├── annotations/     # Editable color masks (auto-saved)
+└── labels/          # Exported ML-ready labels
 ```
 
-## Key Technical Specifications
+## Technical Specifications
 
 ### Internal Mask
-- Resolution: **2x the source image with 4096px max clamp**
-  - 1024px image → 2048px mask (×2)
-  - 2048px image → 4096px mask (×2)
-  - 4096px image → 4096px mask (×1, clamped)
-- Type: `UInt8` buffer (values strictly 0 or 1), **Boolean arrays prohibited**
-- GPU texture format: `MTLPixelFormat.r8Uint`
-- Max classes: **8** (show alert when limit reached)
+- Resolution: **2x source image (max 4096px)**
+- Format: `UInt8` buffer, `MTLPixelFormat.r8Uint`
+- Max classes: **8**
 
-### Undo Patches
-- **MVP: Uncompressed storage** (compression out of scope)
-- Patch data: `Data` type holding raw UInt8 bytes
+### Smoothing Algorithm
+- **Competition-based moving average**
+- Kernel size: 7-31px (configurable in Settings)
+- 2-pass application for smooth results
+- Handles class-to-class and class-to-background boundaries
 
-### Annotation Loading
-- Auto-load `annotations/{basename}.png` when opening image
-- Color interpretation:
-  - White (#FFFFFF) = background (not masked)
-  - Any other color = mask class
-- **Color snapping:** Nearest unique RGB value (no tolerance clustering)
-- **Anti-aliased pixels:** Treated as nearest solid color
-
-### Export Formats (to `labels/` folder)
-1. **PNG** - Color mask or class-separate binary masks
-2. **COCO JSON** - Polygon segmentation with category_id
-3. **YOLO-seg** - Normalized (0-1) polygon coordinates
-
-## UI Layout
-
-- **Left:** Pen thickness slider (vertical, 1-100px radius, logarithmic scale)
-- **Center:** Metal canvas with image + mask overlay
-- **Right:** Annotation color picker, image transparency slider, SAM button (stub)
-- **Top bar:** Image navigation (◀ 12/128 ▶), Export annotation button
+### SAM 2.1 Models
+- **Tiny**: Faster, lower memory
+- **Small**: More accurate
+- Models included in `Services/SAM/Models/`
 
 ## Gesture Mapping
 
-| Input | Action | Implementation |
-|-------|--------|----------------|
-| Pencil drag | Paint/Erase | `UITouch.type == .pencil` |
-| 2-finger drag | Pan | `UIPanGestureRecognizer` |
-| 2-finger pinch | Zoom | `UIPinchGestureRecognizer` |
-| 2-finger twist | Free rotation | `UIRotationGestureRecognizer` |
-| 2-finger tap | Undo | Custom tap gesture |
-| 3-finger tap | Redo | Custom tap gesture |
+| Input | Action |
+|-------|--------|
+| Apple Pencil | Paint / Erase / Tool action |
+| 2-finger drag | Pan |
+| 2-finger pinch | Zoom |
+| 2-finger rotate | Rotate |
+| 2-finger tap | Undo |
+| 3-finger tap | Redo |
 
-## Drawing Implementation
+## OSS Scope & Strategy
 
-- Brush: Circle stamp method via Metal compute shader
-- Stamp interval: ≤ radius for continuous strokes
-- Pencil coordinates inverse-transformed to mask coordinates via `CanvasTransform`
+### In Scope (This Repository)
+- All annotation tools (Paint, Fill, Smooth, SAM)
+- Local file management
+- Export formats (PNG, COCO, YOLO)
+- On-device AI (SAM 2.1)
 
-## Undo/Redo (bbox patch method)
+### Out of Scope (Separate Development)
+- Cloud services
+- User accounts
+- Team collaboration
+- Extended workflows
 
-1. At stroke start: capture bbox region from GPU
-2. During stroke: expand bbox as stamps are applied
-3. At stroke end: create `UndoAction` with (classID, bbox, previousPatch)
-4. Undo: restore patch to GPU texture
+**Note:** This is intentional. OSS focuses on the core annotation experience.
+Cloud and collaboration features are developed separately.
 
-## Auto-Save
+## Future OSS Roadmap
 
-Triggers:
+- [ ] Video annotation support
+- [ ] Additional export formats
+- [ ] Custom color palette
+
+## Licensing
+
+- **This project:** MIT License
+- **SAM 2.1 models:** Apache 2.0 (Meta Platforms, Inc.)
+
+See `THIRD_PARTY_NOTICES.md` for details.
+
+## Auto-Save Triggers
+
 - Stroke end (500ms debounce)
 - Image navigation (immediate)
 - App backgrounding (immediate)
-
-## MVP Scope
-
-- SAM integration: UI stub only (no inference)
-- No cloud sync, no video support
