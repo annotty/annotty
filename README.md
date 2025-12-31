@@ -12,14 +12,14 @@
 
 [Features](#features) • [Installation](#installation) • [Usage](#usage) • [Export Formats](#export-formats) • [Contributing](#contributing)
 
-| | |
+| Precision annotation for complex structures | The same workflow for everyday objects |
 |:---:|:---:|
 | ![Screenshot 1](assets/screenshot_eye.png) | ![Screenshot 2](assets/screenshot_orange.jpg) |
 
-</div>
-
 > **Scope:** Annotty is designed for research, education, and prototyping.
 > Cloud services and extended workflows are developed separately.
+
+</div>
 
 ---
 
