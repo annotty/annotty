@@ -1,0 +1,232 @@
+<div align="center">
+
+# Annotty
+
+### The First iPad App with SAM 2.1 for ML Segmentation Annotation
+
+**Draw pixel-perfect segmentation masks with Apple Pencil. Powered by AI.**
+
+[![Platform](https://img.shields.io/badge/Platform-iPadOS-blue.svg)](https://www.apple.com/ipad/)
+[![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![SAM 2.1](https://img.shields.io/badge/SAM-2.1-purple.svg)](https://github.com/facebookresearch/sam2)
+
+[Features](#features) • [Installation](#installation) • [Usage](#usage) • [Export Formats](#export-formats) • [Contributing](#contributing)
+
+</div>
+
+---
+
+## The Problem
+
+Creating segmentation masks for machine learning is **painful**:
+
+| Frustration | Current Tools |
+|-------------|---------------|
+| **Desktop-only workflows** | CVAT, Label Studio, Labelbox — all require a computer |
+| **No stylus optimization** | Mouse clicking is slow and imprecise for pixel-level work |
+| **Cloud dependency** | Your sensitive data uploaded to third-party servers |
+| **Expensive pricing** | Enterprise tools cost $500-2,000+/month per team |
+| **No AI assistance on mobile** | SAM integration exists only on web/desktop |
+
+**You shouldn't need a $2,000/month enterprise contract to annotate images efficiently.**
+
+---
+
+## The Solution
+
+**Annotty** brings professional-grade segmentation annotation to iPad with AI superpowers:
+
+### Features
+
+| Feature | Description |
+|---------|-------------|
+| **Apple Pencil Native** | Draw masks like you're painting in Procreate — natural, fast, precise |
+| **SAM 2.1 Integration** | Tap or draw a box, let Meta's AI complete the mask instantly |
+| **100% Offline** | No internet required. Your data never leaves your device |
+| **Multi-class Support** | Up to 8 annotation classes with customizable names |
+| **Free & Open Source** | No subscriptions, no limits, forever free |
+
+### SAM 2.1 Modes
+
+- **Point Prompt**: Tap anywhere on an object → AI segments it
+- **Box Prompt**: Draw a bounding box → AI fills the precise mask
+- **Model Options**: Choose Tiny (faster) or Small (more accurate)
+
+### Export Formats
+
+| Format | Use Case |
+|--------|----------|
+| **PNG Masks** | Direct use in training pipelines |
+| **COCO JSON** | Standard format for instance segmentation |
+| **YOLO-seg** | Ultralytics YOLO segmentation training |
+
+---
+
+## Why Annotty?
+
+<table>
+<tr>
+<td width="50%">
+
+### Before Annotty
+- Open laptop, launch Docker, start CVAT
+- Click... click... click... with mouse
+- Upload images to cloud service
+- Pay $99/month minimum
+- No AI help on mobile
+
+</td>
+<td width="50%">
+
+### With Annotty
+- Open iPad, launch app
+- Draw naturally with Apple Pencil
+- Everything stays on your device
+- Free forever
+- SAM 2.1 does the heavy lifting
+
+</td>
+</tr>
+</table>
+
+---
+
+## Installation
+
+### Requirements
+
+- iPad with Apple Pencil support
+- iPadOS 17.0+
+- Xcode 15+ (for building from source)
+
+### Build from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/ykitaguchi77/annotty.git
+cd annotty
+
+# Open in Xcode
+open Annotty.xcodeproj
+
+# Build and run on your iPad
+# Select your iPad as the target device and press Cmd+R
+```
+
+---
+
+## Usage
+
+### Basic Workflow
+
+```
+1. Load Images    →  Import folder or open existing project
+2. Annotate       →  Paint with Apple Pencil or use SAM
+3. Navigate       →  Swipe through images, auto-saves
+4. Export         →  Choose format (PNG/COCO/YOLO)
+```
+
+### Controls
+
+| Input | Action |
+|-------|--------|
+| Apple Pencil | Paint / Erase mask |
+| 2-finger drag | Pan canvas |
+| 2-finger pinch | Zoom in/out |
+| 2-finger rotate | Rotate view |
+| 2-finger tap | Undo |
+| 3-finger tap | Redo |
+
+### SAM Mode
+
+1. Tap the **SAM** button in the right panel
+2. Wait for model to load (first time only)
+3. **Tap** on object → Point prompt segmentation
+4. **Drag** a box around object → Box prompt segmentation
+
+---
+
+## Project Structure
+
+```
+YourProject/
+├── images/          # Source images (PNG, JPG)
+├── annotations/     # Editable color masks (auto-saved)
+└── labels/          # Exported ML-ready labels
+```
+
+---
+
+## Technical Details
+
+### Architecture
+
+- **UI**: SwiftUI
+- **Rendering**: Metal (GPU-accelerated)
+- **AI**: Core ML (SAM 2.1)
+- **Storage**: Local filesystem
+
+### Mask Specification
+
+- Resolution: 2x source image (max 4096px)
+- Format: 8-bit indexed color PNG
+- Classes: Up to 8 per project
+
+---
+
+## Use Cases
+
+| Industry | Application |
+|----------|-------------|
+| **Medical AI** | Annotate scans with HIPAA-compliant offline workflow |
+| **Autonomous Vehicles** | Label road scenes with precision |
+| **Manufacturing** | Mark defects for quality inspection models |
+| **Agriculture** | Segment crops, weeds, and soil |
+| **Research** | Quick dataset creation for experiments |
+
+---
+
+## Roadmap
+
+- [ ] Video annotation support
+- [ ] Cloud sync (optional)
+- [ ] Team collaboration
+- [ ] Custom model integration
+- [ ] Android version
+
+---
+
+## Contributing
+
+We welcome contributions! Here's how you can help:
+
+1. **Report bugs** — Open an issue with reproduction steps
+2. **Suggest features** — Share your ideas in Discussions
+3. **Submit PRs** — Fork, branch, code, and submit
+4. **Spread the word** — Star the repo and share with others
+
+---
+
+## Acknowledgments
+
+- [Meta AI](https://github.com/facebookresearch/sam2) — SAM 2.1 model (Apache 2.0)
+- Apple — Metal framework and Core ML
+
+---
+
+## License
+
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+SAM 2.1 models are licensed under Apache 2.0 by Meta AI.
+
+---
+
+<div align="center">
+
+**Built with love for the ML community**
+
+[Report Bug](https://github.com/ykitaguchi77/annotty/issues) • [Request Feature](https://github.com/ykitaguchi77/annotty/issues) • [Discussions](https://github.com/ykitaguchi77/annotty/discussions)
+
+</div>
