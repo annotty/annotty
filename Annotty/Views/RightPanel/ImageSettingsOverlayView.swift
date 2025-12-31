@@ -8,6 +8,7 @@ struct ImageSettingsOverlayView: View {
     @Binding var imageBrightness: Float
     @Binding var maskFillAlpha: Float
     @Binding var maskEdgeAlpha: Float
+    @Binding var smoothKernelSize: Int
     @Binding var selectedSAMModel: SAMModelType
     @Binding var classNames: [String]
     var onClearClassNames: () -> Void
@@ -107,6 +108,32 @@ struct ImageSettingsOverlayView: View {
                             .cornerRadius(6)
                         }
                         .buttonStyle(.plain)
+                    }
+
+                    Divider()
+                        .background(Color.gray.opacity(0.5))
+                        .padding(.horizontal, 16)
+
+                    // Smooth settings section
+                    VStack(spacing: 12) {
+                        Text("Smooth Tool")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+
+                        IntSettingsSliderView(
+                            title: "Kernel Size",
+                            value: $smoothKernelSize,
+                            range: 7...31,
+                            step: 2  // Ensure odd numbers
+                        )
+
+                        Text("Larger = smoother edges")
+                            .font(.caption2)
+                            .foregroundColor(.gray.opacity(0.7))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
                     }
 
                     Divider()
@@ -307,6 +334,69 @@ struct SettingsSliderView: View {
     }
 }
 
+// MARK: - Int Settings Slider Component
+
+/// Horizontal slider for integer values with step control
+struct IntSettingsSliderView: View {
+    let title: String
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+    let step: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Title and value
+            HStack {
+                Text(title)
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                Spacer()
+                Text("\(value)px")
+                    .font(.caption)
+                    .foregroundColor(.white)
+                    .monospacedDigit()
+            }
+
+            // Slider track
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    // Track background
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color(white: 0.3))
+                        .frame(height: 8)
+
+                    // Filled portion
+                    let normalizedValue = Float(value - range.lowerBound) / Float(range.upperBound - range.lowerBound)
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.orange.opacity(0.6))
+                        .frame(width: geometry.size.width * CGFloat(normalizedValue), height: 8)
+
+                    // Thumb
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 20, height: 20)
+                        .shadow(radius: 2)
+                        .offset(x: geometry.size.width * CGFloat(normalizedValue) - 10)
+                }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { gestureValue in
+                            let normalized = gestureValue.location.x / geometry.size.width
+                            let clamped = min(max(normalized, 0), 1)
+                            let rawValue = Float(range.lowerBound) + Float(clamped) * Float(range.upperBound - range.lowerBound)
+                            // Snap to step
+                            let stepped = Int(round(rawValue / Float(step))) * step
+                            value = min(max(stepped, range.lowerBound), range.upperBound)
+                        }
+                )
+            }
+            .frame(height: 20)
+        }
+        .padding(.horizontal, 16)
+    }
+}
+
 // MARK: - Preview
 
 #Preview {
@@ -318,6 +408,7 @@ struct SettingsSliderView: View {
             imageBrightness: .constant(0.0),
             maskFillAlpha: .constant(0.5),
             maskEdgeAlpha: .constant(1.0),
+            smoothKernelSize: .constant(21),
             selectedSAMModel: .constant(.tiny),
             classNames: .constant(["iris", "eyelid", "sclera", "pupil", "", "", "", ""]),
             onClearClassNames: {}

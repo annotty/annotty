@@ -81,6 +81,35 @@ struct CanvasContainerView: View {
                     SAMBBoxOverlay(start: start, end: end)
                         .allowsHitTesting(false)
                 }
+
+                // Smooth mode indicator overlay
+                if viewModel.isSmoothMode {
+                    // Smooth mode badge
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Text("Smooth: Trace Edge")
+                                .font(.caption)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.orange.opacity(0.8))
+                                .foregroundColor(.white)
+                                .cornerRadius(4)
+                                .padding(8)
+                        }
+                        Spacer()
+                    }
+                    .allowsHitTesting(false)
+                }
+
+                // Smooth stroke path overlay
+                if !viewModel.smoothStrokePoints.isEmpty {
+                    SmoothStrokeOverlay(
+                        points: viewModel.smoothStrokePoints,
+                        brushRadius: CGFloat(viewModel.brushRadius) * viewModel.currentScale
+                    )
+                    .allowsHitTesting(false)
+                }
             }
             .onAppear {
                 viewModel.updateViewSize(geometry.size)

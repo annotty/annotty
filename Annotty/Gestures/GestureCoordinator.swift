@@ -63,11 +63,23 @@ class GestureCoordinator: NSObject {
     /// Called when SAM bbox drag ends (provides start and end points)
     var onSAMBBoxEnd: ((CGPoint, CGPoint) -> Void)?
 
+    /// Called when smooth stroke begins
+    var onSmoothStrokeBegin: ((CGPoint) -> Void)?
+
+    /// Called when smooth stroke continues
+    var onSmoothStrokeContinue: ((CGPoint) -> Void)?
+
+    /// Called when smooth stroke ends
+    var onSmoothStrokeEnd: (() -> Void)?
+
     /// Whether fill mode is active
     var isFillMode: Bool = false
 
     /// Whether SAM mode is active (for point prompt segmentation)
     var isSAMMode: Bool = false
+
+    /// Whether smooth mode is active (for boundary smoothing)
+    var isSmoothMode: Bool = false
 
     // MARK: - State
 
@@ -164,6 +176,15 @@ class GestureCoordinator: NSObject {
         // Record start point for fill/SAM tap detection
         touchStartPoint = location
 
+        // In smooth mode, handle like regular drawing but with different callbacks
+        if isSmoothMode {
+            // Allow both pencil and finger for smooth mode (finger for simulator testing)
+            drawingInputType = inputType
+            isDrawing = true
+            onSmoothStrokeBegin?(location)
+            return
+        }
+
         // In fill mode or SAM mode, wait for tap (handled in touchesEnded)
         if isFillMode || isSAMMode {
             return
@@ -210,6 +231,12 @@ class GestureCoordinator: NSObject {
         guard let touch = touches.first else { return }
         let location = touch.location(in: view)
 
+        // Smooth mode: send continue events
+        if isSmoothMode && isDrawing {
+            onSmoothStrokeContinue?(location)
+            return
+        }
+
         // SAM mode: handle bbox dragging
         if isSAMMode {
             let distance = hypot(location.x - touchStartPoint.x, location.y - touchStartPoint.y)
@@ -244,6 +271,13 @@ class GestureCoordinator: NSObject {
 
         guard let touch = touches.first else { return }
         let location = touch.location(in: view)
+
+        // Smooth mode: end stroke
+        if isSmoothMode && isDrawing {
+            isDrawing = false
+            onSmoothStrokeEnd?()
+            return
+        }
 
         // Fill mode: detect tap (small movement from start)
         if isFillMode {

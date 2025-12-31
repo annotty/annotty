@@ -44,6 +44,7 @@ struct MainView: View {
                 RightPanelView(
                     annotationColor: $viewModel.annotationColor,
                     isFillMode: $viewModel.isFillMode,
+                    isSmoothMode: $viewModel.isSmoothMode,
                     isSAMMode: $viewModel.isSAMMode,
                     isSAMLoading: viewModel.isSAMLoading,
                     isSAMProcessing: viewModel.isSAMProcessing,
@@ -71,6 +72,7 @@ struct MainView: View {
                     imageBrightness: $viewModel.imageBrightness,
                     maskFillAlpha: $viewModel.maskFillAlpha,
                     maskEdgeAlpha: $viewModel.maskEdgeAlpha,
+                    smoothKernelSize: $viewModel.smoothKernelSize,
                     selectedSAMModel: $viewModel.selectedSAMModel,
                     classNames: $viewModel.classNames,
                     onClearClassNames: { viewModel.clearClassNames() }

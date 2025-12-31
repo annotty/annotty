@@ -4,6 +4,7 @@ import SwiftUI
 struct RightPanelView: View {
     @Binding var annotationColor: Color
     @Binding var isFillMode: Bool
+    @Binding var isSmoothMode: Bool
     @Binding var isSAMMode: Bool
     let isSAMLoading: Bool
     let isSAMProcessing: Bool
@@ -106,6 +107,29 @@ struct RightPanelView: View {
                 Text(isFillMode ? "Tap to fill" : "Fill")
                     .font(.caption2)
                     .foregroundColor(isFillMode ? .cyan : .gray)
+
+                // Smooth mode toggle button
+                Button(action: {
+                    isSmoothMode.toggle()
+                }) {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(isSmoothMode ? annotationColor : Color(white: 0.2))
+                        .frame(width: 50, height: 50)
+                        .overlay(
+                            Image(systemName: "waveform.path")
+                                .font(.title2)
+                                .foregroundColor(isSmoothMode ? .white : .gray)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(isSmoothMode ? Color.white : Color.gray.opacity(0.5), lineWidth: isSmoothMode ? 2 : 1)
+                        )
+                }
+                .buttonStyle(.plain)
+
+                Text(isSmoothMode ? "Trace edge" : "Smooth")
+                    .font(.caption2)
+                    .foregroundColor(isSmoothMode ? .cyan : .gray)
             }
             .padding(.top, 20)
 
@@ -176,6 +200,7 @@ struct RightPanelView: View {
     RightPanelView(
         annotationColor: .constant(Color(red: 1, green: 0, blue: 0)),
         isFillMode: .constant(false),
+        isSmoothMode: .constant(false),
         isSAMMode: .constant(false),
         isSAMLoading: false,
         isSAMProcessing: false,

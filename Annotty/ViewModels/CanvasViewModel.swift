@@ -21,9 +21,10 @@ class CanvasViewModel: ObservableObject {
     @Published var isFillMode: Bool = false {
         didSet {
             gestureCoordinator.isFillMode = isFillMode
-            // Disable SAM mode when fill mode is enabled
-            if isFillMode && isSAMMode {
-                isSAMMode = false
+            // Disable other modes when fill mode is enabled
+            if isFillMode {
+                if isSAMMode { isSAMMode = false }
+                if isSmoothMode { isSmoothMode = false }
             }
         }
     }
@@ -32,9 +33,22 @@ class CanvasViewModel: ObservableObject {
     @Published var isSAMMode: Bool = false {
         didSet {
             gestureCoordinator.isSAMMode = isSAMMode
-            // Disable fill mode when SAM mode is enabled
-            if isSAMMode && isFillMode {
-                isFillMode = false
+            // Disable other modes when SAM mode is enabled
+            if isSAMMode {
+                if isFillMode { isFillMode = false }
+                if isSmoothMode { isSmoothMode = false }
+            }
+        }
+    }
+
+    /// Smooth mode for boundary smoothing
+    @Published var isSmoothMode: Bool = false {
+        didSet {
+            gestureCoordinator.isSmoothMode = isSmoothMode
+            // Disable other modes when smooth mode is enabled
+            if isSmoothMode {
+                if isFillMode { isFillMode = false }
+                if isSAMMode { isSAMMode = false }
             }
         }
     }
@@ -127,6 +141,10 @@ class CanvasViewModel: ObservableObject {
         }
     }
 
+    /// Smooth kernel size for boundary smoothing (odd number, 7-31)
+    /// Larger values smooth larger wavelength undulations
+    @Published var smoothKernelSize: Int = 21
+
     // MARK: - Image Navigation
 
     @Published private(set) var currentImageIndex: Int = 0
@@ -159,6 +177,12 @@ class CanvasViewModel: ObservableObject {
     private var originalStrokeBbox: CGRect = .null
     /// Original patch at stroke start (for proper patch expansion)
     private var originalStrokePatch: Data?
+
+    // MARK: - Smooth Stroke Tracking
+
+    /// Published smooth stroke points for overlay visualization
+    @Published var smoothStrokePoints: [CGPoint] = []
+    private var smoothStrokeBbox: CGRect = .null
 
     // MARK: - Initialization
 
@@ -350,6 +374,19 @@ class CanvasViewModel: ObservableObject {
             Task { @MainActor in
                 await self.performSAMBBoxPrediction(start: startPoint, end: endPoint)
             }
+        }
+
+        // Smooth stroke callbacks
+        gestureCoordinator.onSmoothStrokeBegin = { [weak self] point in
+            self?.beginSmoothStroke(at: point)
+        }
+
+        gestureCoordinator.onSmoothStrokeContinue = { [weak self] point in
+            self?.continueSmoothStroke(to: point)
+        }
+
+        gestureCoordinator.onSmoothStrokeEnd = { [weak self] in
+            self?.finishSmoothStroke()
         }
     }
 
@@ -1503,6 +1540,235 @@ class CanvasViewModel: ObservableObject {
     /// Clear SAM cache when image changes
     func clearSAMCache() {
         samService.clearCache()
+    }
+
+    // MARK: - Smooth Stroke Handling
+
+    /// Begin smooth stroke at the given point
+    func beginSmoothStroke(at point: CGPoint) {
+        print("[Smooth] 🖌️ Stroke BEGIN at \(point)")
+        smoothStrokePoints = [point]
+
+        // Convert touch point to mask coordinates for bbox calculation
+        let screenPoint = renderer?.convertTouchToScreen(point) ?? point
+        let maskPoint = renderer?.canvasTransform.screenToMask(screenPoint) ?? point
+
+        // Guard against invalid coordinates
+        guard maskPoint.x.isFinite && maskPoint.y.isFinite else {
+            print("[Smooth] Invalid maskPoint at begin: \(maskPoint)")
+            return
+        }
+
+        // Initialize bbox with brush radius padding
+        let maskScaleFactor = renderer?.canvasTransform.maskScaleFactor ?? 2.0
+        let padding = CGFloat(brushRadius * maskScaleFactor)
+        smoothStrokeBbox = CGRect(
+            x: maskPoint.x - padding,
+            y: maskPoint.y - padding,
+            width: padding * 2,
+            height: padding * 2
+        )
+        print("[Smooth] Initial bbox: \(smoothStrokeBbox)")
+    }
+
+    /// Continue smooth stroke to the given point
+    func continueSmoothStroke(to point: CGPoint) {
+        smoothStrokePoints.append(point)
+
+        // Expand bbox to include new point
+        let screenPoint = renderer?.convertTouchToScreen(point) ?? point
+        let maskPoint = renderer?.canvasTransform.screenToMask(screenPoint) ?? point
+
+        guard maskPoint.x.isFinite && maskPoint.y.isFinite else { return }
+
+        let maskScaleFactor = renderer?.canvasTransform.maskScaleFactor ?? 2.0
+        let padding = CGFloat(brushRadius * maskScaleFactor)
+        let pointRect = CGRect(
+            x: maskPoint.x - padding,
+            y: maskPoint.y - padding,
+            width: padding * 2,
+            height: padding * 2
+        )
+
+        if smoothStrokeBbox.isNull {
+            smoothStrokeBbox = pointRect
+        } else {
+            smoothStrokeBbox = smoothStrokeBbox.union(pointRect)
+        }
+    }
+
+    /// Finish smooth stroke and apply morphological smoothing
+    func finishSmoothStroke() {
+        print("[Smooth] ✅ Stroke END - points: \(smoothStrokePoints.count), bbox: \(smoothStrokeBbox)")
+
+        guard !smoothStrokeBbox.isNull else {
+            print("[Smooth] No bbox to smooth")
+            isSmoothMode = false
+            return
+        }
+
+        // Perform morphological smoothing on the stroked region
+        performMorphologicalSmoothing(in: smoothStrokeBbox)
+
+        // Reset stroke tracking
+        smoothStrokePoints.removeAll()
+        smoothStrokeBbox = .null
+
+        // Auto-disable smooth mode after one stroke
+        isSmoothMode = false
+    }
+
+    /// Perform moving average smoothing on mask boundaries
+    /// This smooths jagged edges by averaging nearby pixels
+    private func performMorphologicalSmoothing(in bbox: CGRect) {
+        guard let textureManager = renderer?.textureManager else {
+            print("[Smooth] No texture manager")
+            return
+        }
+
+        // 1. Read current mask data
+        guard let previousData = textureManager.readMask() else {
+            print("[Smooth] Failed to read mask")
+            return
+        }
+
+        let width = Int(textureManager.maskSize.width)
+        let height = Int(textureManager.maskSize.height)
+        let fullBbox = CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))
+
+        // 2. Clamp bbox to texture bounds
+        let clampedBbox = bbox.intersection(fullBbox)
+        guard !clampedBbox.isNull else {
+            print("[Smooth] Bbox out of bounds")
+            return
+        }
+
+        // 3. Use configured kernel size for smoothing
+        // Ensure odd number for symmetric window
+        let kernelSize = smoothKernelSize | 1
+        let halfKernel = kernelSize / 2
+
+        // 4. Expand processing region by kernel size
+        let expandedBbox = clampedBbox.insetBy(dx: CGFloat(-kernelSize), dy: CGFloat(-kernelSize))
+        let processingBbox = expandedBbox.intersection(fullBbox)
+
+        // 5. Convert bbox to integer bounds
+        let minX = max(halfKernel, Int(processingBbox.minX))
+        let minY = max(halfKernel, Int(processingBbox.minY))
+        let maxX = min(width - halfKernel, Int(processingBbox.maxX))
+        let maxY = min(height - halfKernel, Int(processingBbox.maxY))
+
+        guard maxX > minX && maxY > minY else {
+            print("[Smooth] Invalid processing bounds")
+            return
+        }
+
+        // 6. Find which classes are present in the processing region
+        var presentClasses = Set<UInt8>()
+        for y in minY..<maxY {
+            for x in minX..<maxX {
+                let value = previousData[y * width + x]
+                if value > 0 && value <= 8 {
+                    presentClasses.insert(value)
+                }
+            }
+        }
+
+        guard !presentClasses.isEmpty else {
+            print("[Smooth] No mask data in region")
+            return
+        }
+
+        // 7. Apply competition-based smoothing
+        // Instead of processing each class independently, have classes compete for boundary pixels
+        // This prevents gaps between adjacent class boundaries
+        // IMPORTANT: Only smooth pixels that were originally painted (not background)
+        let numberOfPasses = 2
+        var maskData = previousData
+
+        for pass in 0..<numberOfPasses {
+            var newMask = maskData
+
+            for y in minY..<maxY {
+                for x in minX..<maxX {
+                    let idx = y * width + x
+                    let currentValue = maskData[idx]
+                    let originalValue = previousData[idx]
+
+                    // Check if this pixel is near a boundary (has different neighbors)
+                    var isBoundary = false
+                    if x > 0 && maskData[idx - 1] != currentValue { isBoundary = true }
+                    else if x < width - 1 && maskData[idx + 1] != currentValue { isBoundary = true }
+                    else if y > 0 && maskData[idx - width] != currentValue { isBoundary = true }
+                    else if y < height - 1 && maskData[idx + width] != currentValue { isBoundary = true }
+
+                    // Only process boundary pixels
+                    if !isBoundary { continue }
+
+                    // For background pixels, only process if adjacent to painted pixels
+                    // This fills gaps between classes but doesn't paint distant unpainted areas
+                    if originalValue == 0 {
+                        var hasPaintedNeighbor = false
+                        if x > 0 && previousData[idx - 1] > 0 { hasPaintedNeighbor = true }
+                        else if x < width - 1 && previousData[idx + 1] > 0 { hasPaintedNeighbor = true }
+                        else if y > 0 && previousData[idx - width] > 0 { hasPaintedNeighbor = true }
+                        else if y < height - 1 && previousData[idx + width] > 0 { hasPaintedNeighbor = true }
+
+                        // Skip background pixels not adjacent to any painted pixel
+                        if !hasPaintedNeighbor { continue }
+                    }
+
+                    // Calculate moving average for each class in kernel window
+                    // Include background (0) as a class so boundaries with background also smooth
+                    var classCounts: [UInt8: Float] = [:]
+
+                    for ky in -halfKernel...halfKernel {
+                        for kx in -halfKernel...halfKernel {
+                            let nx = x + kx
+                            let ny = y + ky
+                            if nx >= 0 && nx < width && ny >= 0 && ny < height {
+                                let neighborValue = maskData[ny * width + nx]
+                                classCounts[neighborValue, default: 0] += 1
+                            }
+                        }
+                    }
+
+                    // Find the class with highest count (including background)
+                    var bestClass: UInt8 = currentValue
+                    var bestCount: Float = 0
+
+                    for (classID, count) in classCounts {
+                        if count > bestCount {
+                            bestCount = count
+                            bestClass = classID
+                        }
+                    }
+
+                    // Assign pixel to winning class (can become background if background wins)
+                    newMask[idx] = bestClass
+                }
+            }
+
+            maskData = newMask
+            print("[Smooth] Pass \(pass + 1)/\(numberOfPasses) completed")
+        }
+
+        // 8. Upload modified mask
+        do {
+            try textureManager.uploadMask(maskData)
+
+            // 9. Create undo action
+            let action = UndoAction(
+                classID: 0,
+                bbox: fullBbox,
+                previousPatch: Data(previousData)
+            )
+            undoManager.pushUndo(action)
+
+            print("[Smooth] Competition-based smoothing applied (kernel=\(kernelSize), classes=\(presentClasses))")
+        } catch {
+            print("[Smooth] Failed to upload mask: \(error)")
+        }
     }
 
 }
