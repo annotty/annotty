@@ -85,7 +85,7 @@ Creating segmentation masks shouldn't feel like a chore. Annotty brings the intu
 
 ```bash
 # Clone the repository
-git clone https://github.com/ykitaguchi77/annotty.git
+git clone https://github.com/annotty/annotty.git
 cd annotty
 
 # Open in Xcode
@@ -213,6 +213,6 @@ This project includes third-party models and software. See [THIRD_PARTY_NOTICES.
 
 **Built for the ML community**
 
-[Report Bug](https://github.com/ykitaguchi77/annotty/issues) • [Request Feature](https://github.com/ykitaguchi77/annotty/issues) • [Discussions](https://github.com/ykitaguchi77/annotty/discussions)
+[Report Bug](https://github.com/annotty/annotty/issues) • [Request Feature](https://github.com/annotty/annotty/issues) • [Discussions](https://github.com/annotty/annotty/discussions)
 
 </div>
