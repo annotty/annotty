@@ -15,6 +15,10 @@
 
 </div>
 
+> **Note**: This repository provides an open-source, on-device annotation tool.
+> Cloud-based services, medical-grade inference, and enterprise features
+> are provided separately and are not part of this repository.
+
 ---
 
 ## The Problem
