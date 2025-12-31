@@ -47,9 +47,20 @@ Creating segmentation masks for machine learning is **painful**:
 |---------|-------------|
 | **Apple Pencil Native** | Draw masks like you're painting in Procreate — natural, fast, precise |
 | **SAM 2.1 Integration** | Tap or draw a box, let Meta's AI complete the mask instantly |
+| **Flood Fill** | One-tap to fill enclosed regions |
+| **Boundary Smoothing** | Trace edges to smooth jagged boundaries with moving average filter |
 | **100% Offline** | No internet required. Your data never leaves your device |
 | **Multi-class Support** | Up to 8 annotation classes with customizable names |
 | **Free & Open Source** | No subscriptions, no limits, forever free |
+
+### Tool Modes
+
+| Tool | How to Use |
+|------|------------|
+| **Paint/Erase** | Draw directly with Apple Pencil |
+| **Fill** | Tap to flood-fill enclosed areas |
+| **Smooth** | Trace boundaries to remove jagged edges |
+| **SAM** | Tap (point prompt) or drag (box prompt) for AI segmentation |
 
 ### SAM 2.1 Modes
 
@@ -126,7 +137,7 @@ open Annotty.xcodeproj
 
 ```
 1. Load Images    →  Import folder or open existing project
-2. Annotate       →  Paint with Apple Pencil or use SAM
+2. Annotate       →  Paint with Apple Pencil, Fill, Smooth, or use SAM
 3. Navigate       →  Swipe through images, auto-saves
 4. Export         →  Choose format (PNG/COCO/YOLO)
 ```
@@ -142,12 +153,35 @@ open Annotty.xcodeproj
 | 2-finger tap | Undo |
 | 3-finger tap | Redo |
 
-### SAM Mode
+### Tools (Right Panel)
 
-1. Tap the **SAM** button in the right panel
-2. Wait for model to load (first time only)
-3. **Tap** on object → Point prompt segmentation
-4. **Drag** a box around object → Box prompt segmentation
+| Button | Function |
+|--------|----------|
+| **Color swatches** | Select annotation class (1-8) |
+| **Fill** | Toggle flood-fill mode (tap to fill) |
+| **Smooth** | Toggle boundary smoothing mode |
+| **SAM** | Toggle AI segmentation mode |
+| **Settings (gear)** | Open settings panel |
+
+### Settings Panel
+
+| Setting | Description |
+|---------|-------------|
+| **Contrast / Brightness** | Adjust image display |
+| **Mask Fill / Edge Alpha** | Control mask transparency |
+| **Smooth Kernel Size** | Adjust smoothing strength (7-31px) |
+| **SAM Model** | Choose Tiny or Small model |
+| **Class Names** | Customize class labels |
+
+### Smooth Mode
+
+The Smooth tool uses a **competition-based moving average algorithm**:
+
+1. Tap the **Smooth** button to enter smooth mode
+2. Trace along jagged boundaries with Apple Pencil
+3. Boundaries are automatically smoothed
+4. Works for both class-to-class and class-to-background edges
+5. Adjust **Kernel Size** in Settings for stronger/weaker effect
 
 ---
 
@@ -177,6 +211,13 @@ YourProject/
 - Format: 8-bit indexed color PNG
 - Classes: Up to 8 per project
 
+### Smoothing Algorithm
+
+The boundary smoothing uses a competition-based approach:
+- Each boundary pixel competes among all classes (including background)
+- Winner is determined by moving average in kernel window
+- Multiple passes ensure smooth results without gaps between classes
+
 ---
 
 ## Use Cases
@@ -193,11 +234,13 @@ YourProject/
 
 ## Roadmap
 
+- [x] Flood fill tool
+- [x] Boundary smoothing tool
+- [x] SAM 2.1 integration (Point & Box prompts)
 - [ ] Video annotation support
 - [ ] Cloud sync (optional)
 - [ ] Team collaboration
 - [ ] Custom model integration
-- [ ] Android version
 
 ---
 
