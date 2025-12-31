@@ -12,7 +12,9 @@
 
 [Features](#features) • [Installation](#installation) • [Usage](#usage) • [Export Formats](#export-formats) • [Contributing](#contributing)
 
-![Annotty Screenshot](assets/screenshot_crop_b.png)
+| | |
+|:---:|:---:|
+| ![Screenshot 1](assets/screenshot_eye.png) | ![Screenshot 2](assets/screenshot_orange.jpg) |
 
 </div>
 
