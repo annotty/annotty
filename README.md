@@ -185,8 +185,8 @@ YourProject/
 - [x] Boundary smoothing tool
 - [x] AI-assisted segmentation
 - [ ] Video annotation support
-- [ ] Cloud sync
-- [ ] Team collaboration
+- [ ] Additional export formats
+- [ ] Custom color palette
 
 ---
 
