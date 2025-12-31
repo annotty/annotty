@@ -215,8 +215,9 @@ class MetalRenderer: NSObject, ObservableObject {
 
         // Brush radius in mask coordinates
         // UI radius is in original image pixels, multiply by maskScaleFactor to get mask pixels
-        // (contentScaleFactor is NOT applied - we want UI "1" = 1 original image pixel)
-        let adjustedRadius = radius * canvasTransform.maskScaleFactor
+        // Also multiply by contentScaleFactor to match the pixel-based coordinate system
+        // (touch points are converted to pixels, so radius must be too)
+        let adjustedRadius = radius * canvasTransform.maskScaleFactor * Float(contentScaleFactor)
 
         // Paint value: currentClassID when painting, 0 when erasing
         let paintValue: UInt8 = isPainting ? UInt8(currentClassID) : 0
@@ -270,7 +271,8 @@ class MetalRenderer: NSObject, ObservableObject {
         )
 
         // Brush radius in mask coordinates (UI "1" = 1 original image pixel)
-        let adjustedRadius = radius * canvasTransform.maskScaleFactor
+        // Multiply by contentScaleFactor to match pixel-based coordinate system
+        let adjustedRadius = radius * canvasTransform.maskScaleFactor * Float(contentScaleFactor)
 
         // Paint value: currentClassID when painting, 0 when erasing
         let paintValue: UInt8 = isPainting ? UInt8(currentClassID) : 0
