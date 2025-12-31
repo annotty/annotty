@@ -492,6 +492,9 @@ class CanvasViewModel: ObservableObject {
         guard let item = imageManager.currentItem else { return }
         loadImage(from: item.url)
 
+        // Fit image to view after loading
+        resetView()
+
         // Clear SAM cache when loading new image
         clearSAMCache()
 
@@ -795,11 +798,20 @@ class CanvasViewModel: ObservableObject {
         renderer?.canvasTransform.applyRotation(angleDelta: angle, center: screenCenter)
     }
 
-    /// Reset view to default (pan/zoom/rotation)
+    /// Fit image to view (aspect fit, centered, original orientation)
     func resetView() {
-        renderer?.canvasTransform.reset()
-        currentScale = 1.0
-        print("[View] Reset to default")
+        guard let renderer = renderer else { return }
+
+        // Get image size and viewport size (both in pixels for Metal)
+        let imageSize = renderer.textureManager.imageSize
+        let viewportSize = renderer.viewportSize
+
+        // Fit image to viewport
+        renderer.canvasTransform.fitToView(imageSize: imageSize, viewSize: viewportSize)
+
+        // Update published scale for UI
+        currentScale = renderer.canvasTransform.scale
+        print("[View] Fit to view: scale=\(String(format: "%.2f", currentScale))")
     }
 
     // MARK: - Undo/Redo

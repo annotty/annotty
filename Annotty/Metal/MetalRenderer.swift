@@ -47,7 +47,7 @@ class MetalRenderer: NSObject, ObservableObject {
     /// Current class ID for drawing (1-8, 0 = eraser)
     @Published var currentClassID: Int = 1
     var canvasTransform = CanvasTransform()
-    private var viewportSize: CGSize = .zero
+    private(set) var viewportSize: CGSize = .zero
     private(set) var contentScaleFactor: CGFloat = 1.0
 
     // MARK: - State Flags
