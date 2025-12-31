@@ -14,6 +14,9 @@
 
 </div>
 
+> **Scope:** Annotty is designed for research, education, and prototyping.
+> Cloud services and extended workflows are developed separately.
+
 ---
 
 ## Why Annotty?
@@ -201,6 +204,8 @@ We welcome contributions! Here's how you can help:
 ## License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+This project includes third-party models and software. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for details.
 
 ---
 
