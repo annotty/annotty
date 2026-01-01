@@ -101,6 +101,9 @@ class CanvasViewModel: ObservableObject {
     /// UserDefaults key for class names
     private static let classNamesKey = "annotty.classNames"
 
+    /// UserDefaults key for last viewed image
+    private static let lastImageNameKey = "annotty.lastImageName"
+
     // MARK: - Display Settings
 
     @Published var annotationColor: Color = Color(red: 1, green: 0, blue: 0) {
@@ -150,8 +153,9 @@ class CanvasViewModel: ObservableObject {
     @Published private(set) var currentImageIndex: Int = 0
     @Published private(set) var totalImageCount: Int = 0
 
-    // MARK: - Saving State
+    // MARK: - Loading/Saving State
 
+    @Published private(set) var isLoading: Bool = false
     @Published private(set) var isSaving: Bool = false
 
     // MARK: - Undo Manager
@@ -173,10 +177,26 @@ class CanvasViewModel: ObservableObject {
     private var strokeBbox: CGRect = .null
     private var strokeStartPatch: Data?
 
+    /// Flag to track if mask has been modified since last save
+    private var maskModified: Bool = false
+
     /// Original bbox at stroke start (for proper patch expansion)
     private var originalStrokeBbox: CGRect = .null
     /// Original patch at stroke start (for proper patch expansion)
     private var originalStrokePatch: Data?
+
+    // MARK: - QuickLine (hold to straighten)
+
+    /// Timer for detecting stationary pen (QuickLine feature)
+    private var quickLineTimer: Timer?
+    /// Threshold time in seconds to trigger line straightening
+    private let quickLineDelay: TimeInterval = 1.0
+    /// Distance threshold to consider pen as stationary (in screen points)
+    private let quickLineStationaryThreshold: CGFloat = 5.0
+    /// Last position for stationary detection
+    private var quickLineLastPoint: CGPoint?
+    /// First point of stroke (for straight line)
+    private var strokeStartPoint: CGPoint?
 
     // MARK: - Smooth Stroke Tracking
 
@@ -239,7 +259,14 @@ class CanvasViewModel: ObservableObject {
 
         imageManager.setImages(imageURLs)
 
-        // Load first image with its annotation (if exists)
+        // Resume from last viewed image if it still exists
+        if let lastImageName = UserDefaults.standard.string(forKey: Self.lastImageNameKey),
+           let index = imageManager.items.firstIndex(where: { $0.baseName == lastImageName }) {
+            imageManager.goTo(index: index)
+            print("[Project] Resuming from: \(lastImageName)")
+        }
+
+        // Load current image with its annotation (if exists)
         if imageManager.currentItem != nil {
             loadCurrentImage()
         }
@@ -439,71 +466,61 @@ class CanvasViewModel: ObservableObject {
     // MARK: - Image Navigation
 
     func previousImage() {
-        guard !isSaving else { return }
         saveAndNavigate { [weak self] in
             self?.imageManager.previous()
         }
     }
 
     func nextImage() {
-        guard !isSaving else { return }
         saveAndNavigate { [weak self] in
             self?.imageManager.next()
         }
     }
 
     func goToImage(index: Int) {
-        guard !isSaving else { return }
         guard index != currentImageIndex else { return }
         saveAndNavigate { [weak self] in
             self?.imageManager.goTo(index: index)
         }
     }
 
-    /// Save current annotation asynchronously, then navigate
+    /// Save current annotation in background, navigate immediately
     private func saveAndNavigate(navigation: @escaping () -> Void) {
-        guard let imageItem = imageManager.currentItem,
-              let textureManager = renderer?.textureManager else {
-            navigation()
-            loadCurrentImage()
-            return
-        }
-
-        // Read mask data from GPU (must be on main thread)
-        guard let maskData = textureManager.readMask() else {
-            navigation()
-            loadCurrentImage()
-            return
-        }
-
-        // Check if mask has any data
-        let hasData = maskData.contains { $0 != 0 }
-        guard hasData else {
-            navigation()
-            loadCurrentImage()
-            return
-        }
-
-        let maskWidth = Int(textureManager.maskSize.width)
-        let maskHeight = Int(textureManager.maskSize.height)
+        // Capture data needed for background save before navigation
+        let shouldSave = maskModified
+        let imageItem = imageManager.currentItem
+        let textureManager = renderer?.textureManager
+        let maskData: [UInt8]? = shouldSave ? textureManager?.readMask() : nil
+        let maskWidth = textureManager.map { Int($0.maskSize.width) } ?? 0
+        let maskHeight = textureManager.map { Int($0.maskSize.height) } ?? 0
         let color = annotationColor
-        let imageURL = imageItem.url
 
-        // Show saving indicator
+        // Navigate immediately (no waiting for save)
+        navigation()
+        loadCurrentImage()
+
+        // Save in background if needed
+        guard shouldSave,
+              let imageURL = imageItem?.url,
+              let data = maskData,
+              data.contains(where: { $0 != 0 }) else {
+            return
+        }
+
+        // Reset modified flag and show saving indicator
+        maskModified = false
         isSaving = true
 
         // PNG generation and file write on background thread
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let pngData = self?.createColoredPNG(
-                from: maskData,
+                from: data,
                 width: maskWidth,
                 height: maskHeight,
                 color: color
             ) else {
                 DispatchQueue.main.async {
                     self?.isSaving = false
-                    navigation()
-                    self?.loadCurrentImage()
                 }
                 return
             }
@@ -511,35 +528,51 @@ class CanvasViewModel: ObservableObject {
             // Save to file
             do {
                 try ProjectFileService.shared.saveAnnotation(pngData, for: imageURL)
-                print("[Save] Saved annotation (async)")
+                print("[Save] Saved annotation (background)")
             } catch {
                 print("[Save] Failed: \(error)")
             }
 
-            // Back to main thread for navigation
             DispatchQueue.main.async {
                 self?.isSaving = false
-                navigation()
-                self?.loadCurrentImage()
             }
         }
     }
 
     private func loadCurrentImage() {
         guard let item = imageManager.currentItem else { return }
-        loadImage(from: item.url)
 
-        // Fit image to view after loading
-        resetView()
+        isLoading = true
 
-        // Clear SAM cache when loading new image
-        clearSAMCache()
+        // Defer UI update to allow loading indicator to appear
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
 
-        // Always check for annotation file dynamically (not just cached URL)
-        // This ensures newly saved annotations are detected
-        if let annotationURL = ProjectFileService.shared.getAnnotationURL(for: item.url),
-           FileManager.default.fileExists(atPath: annotationURL.path) {
-            loadAnnotation(from: annotationURL)
+            self.loadImage(from: item.url)
+
+            // Reset mask modified flag for new image
+            self.maskModified = false
+
+            // Clear undo/redo history for new image (prevents cross-image contamination)
+            self.undoManager.clear()
+
+            // Fit image to view after loading
+            self.resetView()
+
+            // Clear SAM cache when loading new image
+            self.clearSAMCache()
+
+            // Always check for annotation file dynamically (not just cached URL)
+            // This ensures newly saved annotations are detected
+            if let annotationURL = ProjectFileService.shared.getAnnotationURL(for: item.url),
+               FileManager.default.fileExists(atPath: annotationURL.path) {
+                self.loadAnnotation(from: annotationURL)
+            }
+
+            // Save last viewed image name for resume
+            UserDefaults.standard.set(item.baseName, forKey: Self.lastImageNameKey)
+
+            self.isLoading = false
         }
     }
 
@@ -558,6 +591,12 @@ class CanvasViewModel: ObservableObject {
         lastDrawPoint = point
         strokePoints = [point]
         strokePointCounter = 0
+
+        // QuickLine: save start point and initialize
+        strokeStartPoint = point
+        quickLineLastPoint = point
+        quickLineTimer?.invalidate()
+        quickLineTimer = nil
 
         // Convert touch point to screen pixels, then to mask coordinates
         let screenPoint = renderer?.convertTouchToScreen(point) ?? point
@@ -668,14 +707,31 @@ class CanvasViewModel: ObservableObject {
             // Apply all stamps in a single GPU batch (this is fast)
             renderer?.applyStamps(at: interpolatedPoints, radius: brushRadius, isPainting: isPainting)
 
-            // Expand bbox only once per continueStroke call if needed (expensive operation)
+            // Track expanded bbox for later (defer GPU read to endStroke to avoid freeze)
             if needsBboxExpansion && expandedBbox != strokeBbox {
-                expandStrokePatch(to: expandedBbox)
                 strokeBbox = expandedBbox
             }
 
             // Only store the final point (not all interpolated points)
             strokePoints.append(point)
+
+            // QuickLine: detect stationary pen
+            if let lastPoint = quickLineLastPoint {
+                let distance = hypot(point.x - lastPoint.x, point.y - lastPoint.y)
+                if distance < quickLineStationaryThreshold {
+                    // Pen is stationary - start timer if not already running
+                    if quickLineTimer == nil {
+                        quickLineTimer = Timer.scheduledTimer(withTimeInterval: quickLineDelay, repeats: false) { [weak self] _ in
+                            self?.snapToStraightLine()
+                        }
+                    }
+                } else {
+                    // Pen moved - cancel timer and update last point
+                    quickLineTimer?.invalidate()
+                    quickLineTimer = nil
+                    quickLineLastPoint = point
+                }
+            }
         }
     }
 
@@ -683,6 +739,15 @@ class CanvasViewModel: ObservableObject {
         guard isDrawing else { return }
 
         isDrawing = false
+
+        // Cancel QuickLine timer
+        quickLineTimer?.invalidate()
+        quickLineTimer = nil
+
+        // If bbox was expanded during stroke, read the full patch now (deferred from continueStroke)
+        if strokeBbox != originalStrokeBbox && !strokeBbox.isNull {
+            strokeStartPatch = renderer?.textureManager.readMaskRegion(bbox: strokeBbox)
+        }
 
         // Create undo action
         if let patch = strokeStartPatch, !strokeBbox.isNull {
@@ -692,6 +757,7 @@ class CanvasViewModel: ObservableObject {
                 previousPatch: patch
             )
             undoManager.pushUndo(action)
+            maskModified = true
         }
 
         // Reset stroke state
@@ -700,9 +766,50 @@ class CanvasViewModel: ObservableObject {
         strokeStartPatch = nil
         originalStrokeBbox = .null
         originalStrokePatch = nil
+        strokeStartPoint = nil
+        quickLineLastPoint = nil
 
         // Note: Auto-save removed for performance
         // Saving happens on image navigation or app background
+    }
+
+    /// QuickLine: Replace freehand stroke with a straight line
+    private func snapToStraightLine() {
+        guard isDrawing,
+              let startPoint = strokeStartPoint,
+              let endPoint = strokePoints.last,
+              let originalPatch = originalStrokePatch,
+              !originalStrokeBbox.isNull else {
+            return
+        }
+
+        // Cancel timer
+        quickLineTimer?.invalidate()
+        quickLineTimer = nil
+
+        // Restore original state (undo freehand drawing)
+        renderer?.textureManager.writeMaskRegion(bbox: originalStrokeBbox, data: originalPatch)
+
+        // Calculate straight line points
+        let distance = hypot(endPoint.x - startPoint.x, endPoint.y - startPoint.y)
+        let stepInterval = max(1.0, CGFloat(brushRadius) * 0.3)
+        let steps = max(1, Int(ceil(distance / stepInterval)))
+
+        var linePoints: [CGPoint] = []
+        for i in 0...steps {
+            let t = CGFloat(i) / CGFloat(steps)
+            let x = startPoint.x + (endPoint.x - startPoint.x) * t
+            let y = startPoint.y + (endPoint.y - startPoint.y) * t
+            linePoints.append(CGPoint(x: x, y: y))
+        }
+
+        // Draw straight line
+        renderer?.applyStamps(at: linePoints, radius: brushRadius, isPainting: isPainting)
+
+        // Update stroke points to reflect the straight line
+        strokePoints = [startPoint, endPoint]
+
+        print("[QuickLine] Snapped to straight line: \(Int(distance))px")
     }
 
     private func expandStrokePatch(to newBbox: CGRect) {
@@ -858,6 +965,7 @@ class CanvasViewModel: ObservableObject {
 
         // Restore previous patch
         renderer?.textureManager.writeMaskRegion(bbox: action.bbox, data: action.previousPatch)
+        maskModified = true
     }
 
     func redo() {
@@ -866,6 +974,7 @@ class CanvasViewModel: ObservableObject {
         // For redo, we need to re-apply the stroke
         // This is simplified - full implementation would store the new patch too
         renderer?.textureManager.writeMaskRegion(bbox: action.bbox, data: action.previousPatch)
+        maskModified = true
     }
 
     /// Clear all annotations for current image (undoable with 2-finger tap)
@@ -904,6 +1013,7 @@ class CanvasViewModel: ObservableObject {
 
         // Clear the mask
         renderer?.clearMask()
+        maskModified = true
         print("[Clear] Cleared all annotations (undoable)")
     }
 
@@ -1211,6 +1321,7 @@ class CanvasViewModel: ObservableObject {
                 previousPatch: previousPatch
             )
             undoManager.pushUndo(action)
+            maskModified = true
         } catch {
             print("[FloodFill] Failed to upload mask: \(error)")
         }
@@ -1531,6 +1642,7 @@ class CanvasViewModel: ObservableObject {
         // Upload to texture
         do {
             try textureManager.uploadMask(newMaskData)
+            maskModified = true
             print("[SAM] Mask applied with class \(currentClassID)")
         } catch {
             print("[SAM] Failed to upload mask: \(error)")

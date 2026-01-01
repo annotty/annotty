@@ -96,6 +96,12 @@ class GestureCoordinator: NSObject {
     /// Threshold to distinguish tap from drag (in points)
     private let samDragThreshold: CGFloat = 20
 
+    /// Last time a navigation gesture (pinch/rotation) ended
+    private var lastNavigationGestureTime: Date = .distantPast
+
+    /// Cooldown period after navigation gestures before allowing undo/redo
+    private let undoCooldownPeriod: TimeInterval = 0.3
+
     // MARK: - Gesture Recognizers
 
     private var panGesture: UIPanGestureRecognizer?
@@ -352,6 +358,8 @@ class GestureCoordinator: NSObject {
             let translation = gesture.translation(in: view)
             onPan?(translation)
             gesture.setTranslation(.zero, in: view)
+        case .ended, .cancelled:
+            lastNavigationGestureTime = Date()
         default:
             break
         }
@@ -370,6 +378,7 @@ class GestureCoordinator: NSObject {
             lastPinchScale = gesture.scale
         case .ended, .cancelled:
             lastPinchScale = 1.0
+            lastNavigationGestureTime = Date()
         default:
             break
         }
@@ -384,6 +393,8 @@ class GestureCoordinator: NSObject {
             // Free rotation, no snapping
             onRotation?(gesture.rotation, center)
             gesture.rotation = 0
+        case .ended, .cancelled:
+            lastNavigationGestureTime = Date()
         default:
             break
         }
@@ -391,12 +402,20 @@ class GestureCoordinator: NSObject {
 
     @objc private func handleTwoFingerTap(_ gesture: UITapGestureRecognizer) {
         if gesture.state == .recognized {
+            // Ignore if within cooldown period after pinch/rotation
+            guard Date().timeIntervalSince(lastNavigationGestureTime) > undoCooldownPeriod else {
+                return
+            }
             onUndo?()
         }
     }
 
     @objc private func handleThreeFingerTap(_ gesture: UITapGestureRecognizer) {
         if gesture.state == .recognized {
+            // Ignore if within cooldown period after pinch/rotation
+            guard Date().timeIntervalSince(lastNavigationGestureTime) > undoCooldownPeriod else {
+                return
+            }
             onRedo?()
         }
     }

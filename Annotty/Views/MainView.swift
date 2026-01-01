@@ -15,6 +15,7 @@ struct MainView: View {
             TopBarView(
                 currentIndex: viewModel.currentImageIndex,
                 totalCount: viewModel.totalImageCount,
+                isLoading: viewModel.isLoading,
                 isSaving: viewModel.isSaving,
                 onPrevious: { viewModel.previousImage() },
                 onNext: { viewModel.nextImage() },

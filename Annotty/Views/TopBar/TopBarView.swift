@@ -4,6 +4,7 @@ import SwiftUI
 struct TopBarView: View {
     let currentIndex: Int
     let totalCount: Int
+    let isLoading: Bool
     let isSaving: Bool
     let onPrevious: () -> Void
     let onNext: () -> Void
@@ -51,18 +52,18 @@ struct TopBarView: View {
                 onGoTo: onGoTo
             )
 
-            // Saving indicator
-            if isSaving {
-                HStack(spacing: 6) {
+            // Loading/Saving indicator (fixed width to prevent layout shift)
+            HStack(spacing: 6) {
+                if isLoading || isSaving {
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(0.8)
-                    Text("Saving...")
+                    Text(isLoading ? "Loading..." : "Saving...")
                         .font(.caption)
                         .foregroundColor(.gray)
                 }
-                .padding(.leading, 12)
             }
+            .frame(width: 100, alignment: .leading)
 
             Spacer()
 
@@ -123,6 +124,7 @@ struct TopBarView: View {
     TopBarView(
         currentIndex: 12,
         totalCount: 128,
+        isLoading: false,
         isSaving: false,
         onPrevious: {},
         onNext: {},

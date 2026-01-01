@@ -40,17 +40,35 @@ class TextureManager {
 
     // MARK: - Image Loading
 
-    /// Load source image from URL
+    /// Load source image from URL using MTKTextureLoader (GPU-accelerated)
     func loadImage(from url: URL) throws {
-        guard let image = UIImage(contentsOfFile: url.path),
-              let cgImage = image.cgImage else {
-            throw TextureError.invalidImage
-        }
+        // Use MTKTextureLoader for fast GPU-accelerated loading
+        let options: [MTKTextureLoader.Option: Any] = [
+            .textureUsage: MTLTextureUsage.shaderRead.rawValue,
+            .textureStorageMode: MTLStorageMode.shared.rawValue,
+            .SRGB: false
+        ]
 
-        try loadImage(cgImage)
+        let texture = try textureLoader.newTexture(URL: url, options: options)
+        imageTexture = texture
+
+        let width = texture.width
+        let height = texture.height
+        imageSize = CGSize(width: width, height: height)
+
+        // Calculate mask dimensions with 4096 max clamp
+        let maxEdge = max(width, height)
+        maskScaleFactor = min(2.0, Float(Self.maxMaskDimension) / Float(maxEdge))
+
+        let maskWidth = Int(Float(width) * maskScaleFactor)
+        let maskHeight = Int(Float(height) * maskScaleFactor)
+        maskSize = CGSize(width: maskWidth, height: maskHeight)
+
+        // Create new mask texture for this image
+        maskTexture = try createMaskTexture()
     }
 
-    /// Load source image from CGImage
+    /// Load source image from CGImage (fallback for in-memory images)
     func loadImage(_ cgImage: CGImage) throws {
         let width = cgImage.width
         let height = cgImage.height
@@ -64,46 +82,14 @@ class TextureManager {
         let maskHeight = Int(Float(height) * maskScaleFactor)
         maskSize = CGSize(width: maskWidth, height: maskHeight)
 
-        // Create image texture
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .rgba8Unorm,
-            width: width,
-            height: height,
-            mipmapped: false
-        )
-        descriptor.usage = [.shaderRead]
-        descriptor.storageMode = .shared
+        // Use MTKTextureLoader for CGImage too
+        let options: [MTKTextureLoader.Option: Any] = [
+            .textureUsage: MTLTextureUsage.shaderRead.rawValue,
+            .textureStorageMode: MTLStorageMode.shared.rawValue,
+            .SRGB: false
+        ]
 
-        guard let texture = device.makeTexture(descriptor: descriptor) else {
-            throw TextureError.textureCreationFailed
-        }
-
-        // Copy image data to texture
-        let bytesPerPixel = 4
-        let bytesPerRow = width * bytesPerPixel
-        var pixelData = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
-
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        let context = CGContext(
-            data: &pixelData,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        )
-
-        context?.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-
-        texture.replace(
-            region: MTLRegion(origin: MTLOrigin(x: 0, y: 0, z: 0),
-                              size: MTLSize(width: width, height: height, depth: 1)),
-            mipmapLevel: 0,
-            withBytes: pixelData,
-            bytesPerRow: bytesPerRow
-        )
-
+        let texture = try textureLoader.newTexture(cgImage: cgImage, options: options)
         imageTexture = texture
 
         // Create new mask texture for this image
