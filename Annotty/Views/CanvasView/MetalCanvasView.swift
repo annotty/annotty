@@ -16,6 +16,10 @@ class TouchableMTKView: MTKView {
         isMultipleTouchEnabled = true
     }
 
+    // Prevent iPadOS system 3-finger gestures (undo/redo/edit menu)
+    // from intercepting our custom 3-finger tap for redo
+    override var undoManager: UndoManager? { nil }
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         gestureCoordinator?.touchesBegan(touches, with: event, in: self)
     }

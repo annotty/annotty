@@ -24,7 +24,11 @@ struct MainView: View {
                 onClear: { viewModel.clearAllAnnotations() },
                 onExport: { showingExportSheet = true },
                 onLoad: { showingImagePicker = true },
-                onReload: { viewModel.reloadImagesFromProject() }
+                onReload: { viewModel.reloadImagesFromProject() },
+                onUndo: { viewModel.undo() },
+                onRedo: { viewModel.redo() },
+                canUndo: viewModel.canUndo,
+                canRedo: viewModel.canRedo
             )
 
             // Main content area

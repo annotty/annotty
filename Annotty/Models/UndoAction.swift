@@ -14,6 +14,9 @@ struct UndoAction {
     /// MVP: Stored uncompressed. Compression may be considered in future versions.
     let previousPatch: Data
 
+    /// New mask data after modification (captured during undo for redo support)
+    var newPatch: Data?
+
     /// Timestamp when this action was created
     let timestamp: Date
 
@@ -29,7 +32,7 @@ struct UndoAction {
 
     /// Estimated memory usage of this action in bytes
     var memorySize: Int {
-        previousPatch.count + MemoryLayout<UndoAction>.size
+        previousPatch.count + (newPatch?.count ?? 0) + MemoryLayout<UndoAction>.size
     }
 
     init(classID: Int, bbox: CGRect, previousPatch: Data) {

@@ -63,6 +63,12 @@ class AnnotationUndoManager: ObservableObject {
         return action
     }
 
+    /// Store the current mask state on the last redo action (called during undo)
+    func setNewPatchOnLastRedo(_ data: Data) {
+        guard !redoStack.isEmpty else { return }
+        redoStack[redoStack.count - 1].newPatch = data
+    }
+
     /// Clear all undo/redo history
     func clear() {
         undoStack.removeAll()

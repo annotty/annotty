@@ -432,6 +432,14 @@ class CanvasViewModel: ObservableObject {
                 self?.totalImageCount = items.count
             }
             .store(in: &cancellables)
+
+        // Forward undoManager changes so SwiftUI updates canUndo/canRedo
+        undoManager.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - View Size
@@ -960,8 +968,16 @@ class CanvasViewModel: ObservableObject {
 
     // MARK: - Undo/Redo
 
+    var canUndo: Bool { undoManager.canUndo }
+    var canRedo: Bool { undoManager.canRedo }
+
     func undo() {
         guard let action = undoManager.undo() else { return }
+
+        // Capture current state before restoring (for redo)
+        if let currentPatch = renderer?.textureManager.readMaskRegion(bbox: action.bbox) {
+            undoManager.setNewPatchOnLastRedo(currentPatch)
+        }
 
         // Restore previous patch
         renderer?.textureManager.writeMaskRegion(bbox: action.bbox, data: action.previousPatch)
@@ -970,10 +986,10 @@ class CanvasViewModel: ObservableObject {
 
     func redo() {
         guard let action = undoManager.redo() else { return }
+        guard let newPatch = action.newPatch else { return }
 
-        // For redo, we need to re-apply the stroke
-        // This is simplified - full implementation would store the new patch too
-        renderer?.textureManager.writeMaskRegion(bbox: action.bbox, data: action.previousPatch)
+        // Write the post-stroke state
+        renderer?.textureManager.writeMaskRegion(bbox: action.bbox, data: newPatch)
         maskModified = true
     }
 

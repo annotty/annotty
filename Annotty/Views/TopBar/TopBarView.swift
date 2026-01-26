@@ -14,6 +14,10 @@ struct TopBarView: View {
     let onExport: () -> Void
     let onLoad: () -> Void
     let onReload: () -> Void
+    let onUndo: () -> Void
+    let onRedo: () -> Void
+    let canUndo: Bool
+    let canRedo: Bool
 
     var body: some View {
         HStack {
@@ -40,6 +44,28 @@ struct TopBarView: View {
                     .cornerRadius(8)
             }
             .buttonStyle(.plain)
+
+            // Undo button
+            Button(action: onUndo) {
+                Image(systemName: "arrow.uturn.backward")
+                    .padding(8)
+                    .background(canUndo ? Color.gray.opacity(0.5) : Color.gray.opacity(0.2))
+                    .foregroundColor(canUndo ? .white : .gray)
+                    .cornerRadius(8)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canUndo)
+
+            // Redo button
+            Button(action: onRedo) {
+                Image(systemName: "arrow.uturn.forward")
+                    .padding(8)
+                    .background(canRedo ? Color.gray.opacity(0.5) : Color.gray.opacity(0.2))
+                    .foregroundColor(canRedo ? .white : .gray)
+                    .cornerRadius(8)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canRedo)
 
             Spacer()
 
@@ -133,6 +159,10 @@ struct TopBarView: View {
         onClear: {},
         onExport: {},
         onLoad: {},
-        onReload: {}
+        onReload: {},
+        onUndo: {},
+        onRedo: {},
+        canUndo: true,
+        canRedo: false
     )
 }

@@ -166,6 +166,14 @@ Cloud and collaboration features are developed separately.
 
 See `THIRD_PARTY_NOTICES.md` for details.
 
+## Known Build Issues
+
+### CLAUDE.md duplicate resource error
+
+claude-mem plugin auto-generates `CLAUDE.md` files inside `Annotty/` subdirectories (e.g. `Gestures/CLAUDE.md`, `ViewModels/CLAUDE.md`). Xcode treats these as bundle resources, causing a "Multiple commands produce CLAUDE.md" build error.
+
+**対策済み:** ターゲットのビルド設定に `EXCLUDED_SOURCE_FILE_NAMES = "CLAUDE.md"` を追加し、自動除外しています。もし新しいターゲットを追加した場合は、同じ設定を忘れずに追加してください。
+
 ## Auto-Save Triggers
 
 - Stroke end (500ms debounce)

@@ -9,9 +9,9 @@ enum InputType {
 
 /// Gesture coordinator that separates Apple Pencil from finger input
 /// - Pencil: Drawing immediately (no delay)
-/// - 1-finger: Drawing after 32ms delay (cancelable)
-/// - 2+ fingers: Navigation (pan, zoom, rotate) - cancels pending/ongoing stroke
-/// - 2-finger tap: Undo
+/// - 1-finger: Drawing after 32ms delay (cancelable if 2nd finger detected)
+/// - 2+ fingers: Navigation (pan, zoom, rotate)
+/// - 2-finger tap: Undo (requires navigation gestures to fail first)
 /// - 3-finger tap: Redo
 class GestureCoordinator: NSObject {
     // MARK: - Configuration
@@ -148,6 +148,15 @@ class GestureCoordinator: NSObject {
         rotation.delegate = self
         view.addGestureRecognizer(rotation)
         rotationGesture = rotation
+
+        // 2-finger tap requires navigation gestures to FAIL before recognizing.
+        // This prevents undo from firing during or after pan/pinch/rotation.
+        twoFingerTap.require(toFail: pan)
+        twoFingerTap.require(toFail: pinch)
+        twoFingerTap.require(toFail: rotation)
+        // Note: 3-finger tap does NOT require(toFail:) because pinch/rotation
+        // can hold "possible" state with 3 fingers, blocking redo indefinitely.
+        // 3-finger tap is deliberate enough that cooldown alone is sufficient.
     }
 
     // MARK: - Touch Handling
@@ -171,7 +180,7 @@ class GestureCoordinator: NSObject {
 
         // If 2+ fingers, cancel any pending/ongoing stroke
         if currentTouchCount >= 2 {
-            cancelPendingAndOngoingStroke()
+            cancelOngoingStroke()
             return
         }
 
@@ -184,7 +193,6 @@ class GestureCoordinator: NSObject {
 
         // In smooth mode, handle like regular drawing but with different callbacks
         if isSmoothMode {
-            // Allow both pencil and finger for smooth mode (finger for simulator testing)
             drawingInputType = inputType
             isDrawing = true
             onSmoothStrokeBegin?(location)
@@ -202,7 +210,7 @@ class GestureCoordinator: NSObject {
             isDrawing = true
             onStrokeBegin?(location)
         } else {
-            // Finger: Wait 32ms before starting
+            // Finger: Wait 32ms before starting (allows 2nd finger to cancel)
             drawingInputType = .finger
             isPendingDraw = true
             pendingDrawPoint = location
@@ -229,7 +237,7 @@ class GestureCoordinator: NSObject {
 
         // If 2+ fingers detected during drawing, cancel
         if currentTouchCount >= 2 {
-            cancelPendingAndOngoingStroke()
+            cancelOngoingStroke()
             isSAMBBoxDragging = false
             return
         }
@@ -324,7 +332,7 @@ class GestureCoordinator: NSObject {
     func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?, in view: UIView) {
         currentTouchCount = 0
         isSAMBBoxDragging = false
-        cancelPendingAndOngoingStroke()
+        cancelOngoingStroke()
     }
 
     // MARK: - Private Helpers
@@ -336,12 +344,9 @@ class GestureCoordinator: NSObject {
         isPendingDraw = false
     }
 
-    /// Cancel both pending and ongoing strokes
-    private func cancelPendingAndOngoingStroke() {
-        // Cancel pending draw
+    /// Cancel both pending and ongoing strokes (e.g. when 2+ fingers detected)
+    private func cancelOngoingStroke() {
         cancelPendingDraw()
-
-        // Cancel ongoing stroke
         if isDrawing {
             isDrawing = false
             onStrokeCancel?()  // Different from onStrokeEnd - triggers undo restore
@@ -439,13 +444,10 @@ extension GestureCoordinator: UIGestureRecognizerDelegate {
             return true
         }
 
-        // Tap gestures should not block other gestures from being recognized
-        let tapGestures: [UIGestureRecognizer?] = [
-            twoFingerTapGesture, threeFingerTapGesture
-        ]
-
-        if tapGestures.contains(where: { $0 === gestureRecognizer }) ||
-           tapGestures.contains(where: { $0 === otherGestureRecognizer }) {
+        // Allow 3-finger tap (redo) to recognize alongside pinch/rotation,
+        // which may also activate with 3 fingers on screen.
+        if gestureRecognizer === threeFingerTapGesture ||
+           otherGestureRecognizer === threeFingerTapGesture {
             return true
         }
 
