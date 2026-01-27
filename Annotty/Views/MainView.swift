@@ -1,13 +1,16 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Main app view with the complete UI layout
 /// Layout: Left panel | Center canvas | Right panel
 /// Top bar spans the full width
 struct MainView: View {
     @StateObject private var viewModel = CanvasViewModel()
+    @EnvironmentObject var importCoordinator: ImportCoordinator
     @State private var showingExportSheet = false
     @State private var showingImagePicker = false
     @State private var showingImageSettings = false
+    @State private var isDropTargeted = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,6 +30,8 @@ struct MainView: View {
                 onReload: { viewModel.reloadImagesFromProject() },
                 onUndo: { viewModel.undo() },
                 onRedo: { viewModel.redo() },
+                onDelete: { viewModel.deleteCurrentImage() },
+                showDeleteButton: viewModel.showDeleteButton,
                 canUndo: viewModel.canUndo,
                 canRedo: viewModel.canRedo
             )
@@ -54,6 +59,7 @@ struct MainView: View {
                     isSAMLoading: viewModel.isSAMLoading,
                     isSAMProcessing: viewModel.isSAMProcessing,
                     classNames: viewModel.classNames,
+                    hiddenClassIDs: $viewModel.hiddenClassIDs,
                     onSettingsTapped: {
                         withAnimation(.easeInOut(duration: 0.25)) {
                             showingImageSettings = true
@@ -67,6 +73,20 @@ struct MainView: View {
             }
         }
         .background(Color(white: 0.15))
+        .overlay {
+            // Drop target visual feedback
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.accentColor, lineWidth: 3)
+                    .background(Color.accentColor.opacity(0.08))
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+            }
+        }
+        .onDrop(of: [UTType.image], isTargeted: $isDropTargeted) { providers in
+            viewModel.handleDroppedProviders(providers)
+            return true
+        }
         .ignoresSafeArea(.keyboard)
         .overlay {
             // Image settings slide-in panel
@@ -80,7 +100,9 @@ struct MainView: View {
                     smoothKernelSize: $viewModel.smoothKernelSize,
                     selectedSAMModel: $viewModel.selectedSAMModel,
                     classNames: $viewModel.classNames,
-                    onClearClassNames: { viewModel.clearClassNames() }
+                    showDeleteButton: $viewModel.showDeleteButton,
+                    onClearClassNames: { viewModel.clearClassNames() },
+                    onDeleteAllFiles: { viewModel.deleteAllFiles() }
                 )
                 .transition(.move(edge: .trailing))
             }
@@ -91,10 +113,22 @@ struct MainView: View {
                     .transition(.opacity)
             }
         }
+        .overlay(alignment: .top) {
+            // Import toast notification
+            if importCoordinator.showToast {
+                ImportToastView(count: importCoordinator.importedCount)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .padding(.top, 60)
+            }
+        }
+        .animation(.easeInOut(duration: 0.3), value: importCoordinator.showToast)
         .sheet(isPresented: $showingImagePicker) {
             ImagePickerView(
                 onImageSelected: { url in
                     viewModel.importImage(from: url)
+                },
+                onImagesSelected: { urls in
+                    viewModel.importImages(from: urls)
                 },
                 onFolderSelected: { url in
                     viewModel.importImagesFromFolder(url)
@@ -248,8 +282,33 @@ struct SAMLoadingOverlayView: View {
     }
 }
 
+// MARK: - Import Toast
+
+struct ImportToastView: View {
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.body)
+            Text("\(count) image\(count == 1 ? "" : "s") imported")
+                .font(.subheadline)
+                .fontWeight(.medium)
+        }
+        .foregroundColor(.white)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(
+            Capsule()
+                .fill(Color.accentColor.opacity(0.9))
+                .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+        )
+    }
+}
+
 // MARK: - Preview
 
 #Preview {
     MainView()
+        .environmentObject(ImportCoordinator())
 }

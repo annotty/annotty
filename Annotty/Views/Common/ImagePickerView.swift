@@ -6,10 +6,11 @@ import UniformTypeIdentifiers
 struct ImagePickerView: View {
     @Environment(\.dismiss) private var dismiss
     let onImageSelected: (URL) -> Void
+    let onImagesSelected: ([URL]) -> Void
     let onFolderSelected: (URL) -> Void
     let onProjectSelected: (URL) -> Void
 
-    @State private var selectedItem: PhotosPickerItem?
+    @State private var selectedItems: [PhotosPickerItem] = []
     @State private var showingImagePicker = false
     @State private var showingFolderPicker = false
     @State private var showingProjectPicker = false
@@ -41,8 +42,8 @@ struct ImagePickerView: View {
             VStack(spacing: 20) {
                 Spacer().frame(height: 20)
 
-                // Photos Library
-                PhotosPicker(selection: $selectedItem, matching: .images) {
+                // Photos Library (multi-select)
+                PhotosPicker(selection: $selectedItems, matching: .images) {
                     HStack {
                         Image(systemName: "photo.on.rectangle")
                             .font(.title2)
@@ -54,8 +55,8 @@ struct ImagePickerView: View {
                     .foregroundColor(.white)
                     .cornerRadius(12)
                 }
-                .onChange(of: selectedItem) { _, newItem in
-                    Task { await loadImage(from: newItem) }
+                .onChange(of: selectedItems) { _, newItems in
+                    Task { await loadImages(from: newItems) }
                 }
 
                 // Single image
@@ -133,21 +134,33 @@ struct ImagePickerView: View {
         }
     }
 
-    private func loadImage(from item: PhotosPickerItem?) async {
-        guard let item = item else { return }
-        do {
-            if let data = try await item.loadTransferable(type: Data.self) {
-                let tempURL = FileManager.default.temporaryDirectory
-                    .appendingPathComponent(UUID().uuidString)
-                    .appendingPathExtension("png")
-                try data.write(to: tempURL)
-                await MainActor.run {
-                    onImageSelected(tempURL)
-                    dismiss()
+    private func loadImages(from items: [PhotosPickerItem]) async {
+        guard !items.isEmpty else { return }
+
+        var urls: [URL] = []
+        for item in items {
+            do {
+                if let data = try await item.loadTransferable(type: Data.self) {
+                    let tempURL = FileManager.default.temporaryDirectory
+                        .appendingPathComponent(UUID().uuidString)
+                        .appendingPathExtension("png")
+                    try data.write(to: tempURL)
+                    urls.append(tempURL)
                 }
+            } catch {
+                print("[PhotosPicker] Failed to load item: \(error)")
             }
-        } catch {
-            print("[PhotosPicker] Failed: \(error)")
+        }
+
+        guard !urls.isEmpty else { return }
+
+        await MainActor.run {
+            if urls.count == 1 {
+                onImageSelected(urls[0])
+            } else {
+                onImagesSelected(urls)
+            }
+            dismiss()
         }
     }
 
@@ -210,6 +223,7 @@ struct DocumentPickerView: UIViewControllerRepresentable {
 #Preview {
     ImagePickerView(
         onImageSelected: { url in print("Image: \(url)") },
+        onImagesSelected: { urls in print("Images: \(urls.count)") },
         onFolderSelected: { url in print("Folder: \(url)") },
         onProjectSelected: { url in print("Project: \(url)") }
     )

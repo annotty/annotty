@@ -9,6 +9,7 @@ struct RightPanelView: View {
     let isSAMLoading: Bool
     let isSAMProcessing: Bool
     let classNames: [String]
+    @Binding var hiddenClassIDs: Set<Int>
     let onSettingsTapped: () -> Void
     let onSAMTapped: () -> Void
 
@@ -55,7 +56,9 @@ struct RightPanelView: View {
                 // Color + name list (vertical)
                 VStack(spacing: 3) {
                     ForEach(Array(presetColors.enumerated()), id: \.offset) { index, color in
-                        HStack(spacing: 6) {
+                        let classID = index + 1
+                        let isHidden = hiddenClassIDs.contains(classID)
+                        HStack(spacing: 4) {
                             // Color circle
                             Circle()
                                 .fill(color)
@@ -64,6 +67,7 @@ struct RightPanelView: View {
                                     Circle()
                                         .stroke(annotationColor == color ? Color.white : Color.clear, lineWidth: 2)
                                 )
+                                .opacity(isHidden ? 0.3 : 1.0)
 
                             // Class name (truncated)
                             Text(displayName(for: index))
@@ -71,6 +75,23 @@ struct RightPanelView: View {
                                 .foregroundColor(annotationColor == color ? .white : .gray)
                                 .lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                                .opacity(isHidden ? 0.3 : 1.0)
+
+                            // Visibility toggle
+                            Image(systemName: isHidden ? "eye.slash" : "eye")
+                                .font(.caption2)
+                                .foregroundColor(isHidden ? .gray.opacity(0.5) : .gray)
+                                .frame(width: 20, height: 20)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    withAnimation(.easeInOut(duration: 0.15)) {
+                                        if hiddenClassIDs.contains(classID) {
+                                            hiddenClassIDs.remove(classID)
+                                        } else {
+                                            hiddenClassIDs.insert(classID)
+                                        }
+                                    }
+                                }
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
@@ -205,6 +226,7 @@ struct RightPanelView: View {
         isSAMLoading: false,
         isSAMProcessing: false,
         classNames: ["iris", "eyelid", "sclera", "pupil", "", "", "", ""],
+        hiddenClassIDs: .constant([]),
         onSettingsTapped: {},
         onSAMTapped: {}
     )

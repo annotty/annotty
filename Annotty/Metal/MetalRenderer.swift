@@ -46,6 +46,8 @@ class MetalRenderer: NSObject, ObservableObject {
 
     /// Current class ID for drawing (1-8, 0 = eraser)
     @Published var currentClassID: Int = 1
+    /// Class IDs whose annotations are temporarily hidden during rendering
+    var hiddenClassIDs: Set<Int> = []
     var canvasTransform = CanvasTransform()
     private(set) var viewportSize: CGSize = .zero
     private(set) var contentScaleFactor: CGFloat = 1.0
@@ -174,10 +176,17 @@ class MetalRenderer: NSObject, ObservableObject {
     /// Create uniforms structure for shaders
     private func createUniforms() -> CanvasUniforms {
         // Build class colors tuple (9 elements: 0 unused, 1-8 = class colors)
+        // Hidden classes get alpha = 0 so the shader skips rendering them
+        var visibleColors = classColors
+        for classID in hiddenClassIDs {
+            if classID >= 0 && classID < visibleColors.count {
+                visibleColors[classID].w = 0  // Set alpha to 0
+            }
+        }
         let colors = (
-            classColors[0], classColors[1], classColors[2], classColors[3],
-            classColors[4], classColors[5], classColors[6], classColors[7],
-            classColors[8]
+            visibleColors[0], visibleColors[1], visibleColors[2], visibleColors[3],
+            visibleColors[4], visibleColors[5], visibleColors[6], visibleColors[7],
+            visibleColors[8]
         )
 
         return CanvasUniforms(

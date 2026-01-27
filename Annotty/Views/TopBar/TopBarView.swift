@@ -16,8 +16,12 @@ struct TopBarView: View {
     let onReload: () -> Void
     let onUndo: () -> Void
     let onRedo: () -> Void
+    let onDelete: () -> Void
+    let showDeleteButton: Bool
     let canUndo: Bool
     let canRedo: Bool
+
+    @State private var showingDeleteAlert = false
 
     var body: some View {
         HStack {
@@ -123,6 +127,23 @@ struct TopBarView: View {
             .buttonStyle(.plain)
             .disabled(totalCount == 0)
 
+            // Delete image button (toggled via Settings)
+            if showDeleteButton {
+                Button(action: { showingDeleteAlert = true }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "xmark.bin")
+                        Text("Delete")
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.red.opacity(0.9))
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                }
+                .buttonStyle(.plain)
+                .disabled(totalCount == 0)
+            }
+
             // Export button
             Button(action: onExport) {
                 HStack(spacing: 4) {
@@ -141,6 +162,14 @@ struct TopBarView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(Color(white: 0.1))
+        .alert("Delete Image", isPresented: $showingDeleteAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                onDelete()
+            }
+        } message: {
+            Text("This image and its annotation will be permanently deleted.")
+        }
     }
 }
 
@@ -162,6 +191,8 @@ struct TopBarView: View {
         onReload: {},
         onUndo: {},
         onRedo: {},
+        onDelete: {},
+        showDeleteButton: true,
         canUndo: true,
         canRedo: false
     )

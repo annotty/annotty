@@ -146,6 +146,85 @@ class ProjectFileService {
         try data.write(to: labelURL)
     }
 
+    // MARK: - Delete Single Image
+
+    /// Delete an image and its corresponding annotation from the project.
+    /// Returns true if the image was successfully deleted.
+    @discardableResult
+    func deleteImage(at imageURL: URL) -> Bool {
+        var success = false
+
+        // Delete the image file
+        if fileManager.fileExists(atPath: imageURL.path) {
+            do {
+                try fileManager.removeItem(at: imageURL)
+                success = true
+            } catch {
+                print("[Delete] Failed to delete image: \(error)")
+                return false
+            }
+        }
+
+        // Delete the corresponding annotation if it exists
+        if let annotationURL = getAnnotationURL(for: imageURL),
+           fileManager.fileExists(atPath: annotationURL.path) {
+            try? fileManager.removeItem(at: annotationURL)
+        }
+
+        return success
+    }
+
+    // MARK: - Delete All Files
+
+    /// Delete all files in images/, annotations/, and labels/ folders.
+    /// Folder structure is preserved (empty folders remain).
+    /// Returns the total number of deleted files.
+    @discardableResult
+    func deleteAllProjectFiles() -> Int {
+        var deletedCount = 0
+
+        for folder in [imagesFolder, annotationsFolder, labelsFolder] {
+            guard let folderURL = folder,
+                  fileManager.fileExists(atPath: folderURL.path) else { continue }
+
+            do {
+                let contents = try fileManager.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: nil)
+                for file in contents {
+                    try fileManager.removeItem(at: file)
+                    deletedCount += 1
+                }
+            } catch {
+                print("[Delete] Failed to clean \(folderURL.lastPathComponent): \(error)")
+            }
+        }
+
+        print("[Delete] Removed \(deletedCount) files from project")
+        return deletedCount
+    }
+
+    // MARK: - Inbox Cleanup
+
+    /// Remove residual files from Documents/Inbox/ left by AirDrop or share sheet.
+    /// Called at app startup to clean up files from previous sessions.
+    func cleanInbox() {
+        guard let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+
+        let inboxURL = documentsURL.appendingPathComponent("Inbox")
+        guard fileManager.fileExists(atPath: inboxURL.path) else { return }
+
+        do {
+            let contents = try fileManager.contentsOfDirectory(at: inboxURL, includingPropertiesForKeys: nil)
+            for file in contents {
+                try? fileManager.removeItem(at: file)
+            }
+            if !contents.isEmpty {
+                print("[Inbox] Cleaned \(contents.count) residual files")
+            }
+        } catch {
+            print("[Inbox] Cleanup failed: \(error)")
+        }
+    }
+
     // MARK: - Copy Image to Project
 
     /// Copy an image to the project's images folder

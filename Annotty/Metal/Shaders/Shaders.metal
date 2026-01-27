@@ -134,17 +134,20 @@ fragment float4 canvasFragment(FragmentIn in [[stage_in]],
     result.a = 1.0;
 
     // If there's a class at this pixel, blend its color
+    // classColor.a == 0 means the class is temporarily hidden
     if (classID > 0 && classID <= MAX_CLASSES) {
         float4 classColor = uniforms.classColors[classID];
 
-        // Check if this is an edge pixel
-        bool isEdge = isEdgePixel(maskTexture, maskCoord, classID);
+        if (classColor.a > 0) {
+            // Check if this is an edge pixel
+            bool isEdge = isEdgePixel(maskTexture, maskCoord, classID);
 
-        // Edge pixels use maskEdgeAlpha, fill pixels use maskFillAlpha
-        float alpha = isEdge ? uniforms.maskEdgeAlpha : uniforms.maskFillAlpha;
+            // Edge pixels use maskEdgeAlpha, fill pixels use maskFillAlpha
+            float alpha = isEdge ? uniforms.maskEdgeAlpha : uniforms.maskFillAlpha;
 
-        float4 maskOverlay = float4(classColor.rgb, alpha);
-        result = mix(result, maskOverlay, maskOverlay.a);
+            float4 maskOverlay = float4(classColor.rgb, alpha);
+            result = mix(result, maskOverlay, maskOverlay.a);
+        }
     }
 
     return result;

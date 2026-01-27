@@ -11,7 +11,13 @@ struct ImageSettingsOverlayView: View {
     @Binding var smoothKernelSize: Int
     @Binding var selectedSAMModel: SAMModelType
     @Binding var classNames: [String]
+    @Binding var showDeleteButton: Bool
     var onClearClassNames: () -> Void
+    var onDeleteAllFiles: () -> Void
+
+    /// Alert state for 2-step delete confirmation
+    @State private var showDeleteFirstAlert = false
+    @State private var showDeleteFinalAlert = false
 
     /// Preset colors for class editing display (must match MetalRenderer.classColors)
     private let presetColors: [Color] = [
@@ -241,12 +247,89 @@ struct ImageSettingsOverlayView: View {
                         }
                     }
 
+                    Divider()
+                        .background(Color.gray.opacity(0.5))
+                        .padding(.horizontal, 16)
+
+                    // Toolbar section
+                    VStack(spacing: 8) {
+                        Text("Toolbar")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+
+                        Toggle(isOn: $showDeleteButton) {
+                            Text("Show Delete Button")
+                                .font(.caption)
+                                .foregroundColor(.white)
+                        }
+                        .tint(.cyan)
+                        .padding(.horizontal, 16)
+                    }
+
+                    Divider()
+                        .background(Color.gray.opacity(0.5))
+                        .padding(.horizontal, 16)
+
+                    // Danger zone - Delete all files
+                    VStack(spacing: 8) {
+                        Text("Danger Zone")
+                            .font(.caption)
+                            .foregroundColor(.red.opacity(0.7))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+
+                        Button(action: {
+                            showDeleteFirstAlert = true
+                        }) {
+                            HStack {
+                                Image(systemName: "trash.fill")
+                                Text("Delete All Files")
+                            }
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(Color.red.opacity(0.8))
+                            .cornerRadius(8)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 16)
+
+                        Text("Removes all images, annotations, and labels")
+                            .font(.caption2)
+                            .foregroundColor(.gray.opacity(0.7))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 16)
+                    }
+
                     Spacer()
                         .frame(height: 20)
                 }
             }
             .frame(width: 220)
             .background(Color(white: 0.12))
+            .alert("Delete All Files?", isPresented: $showDeleteFirstAlert) {
+                Button("Cancel", role: .cancel) {}
+                Button("Continue", role: .destructive) {
+                    showDeleteFinalAlert = true
+                }
+            } message: {
+                Text("This will delete all images, annotations, and exported labels in this project.")
+            }
+            .alert("Are you absolutely sure?", isPresented: $showDeleteFinalAlert) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete Everything", role: .destructive) {
+                    onDeleteAllFiles()
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        isPresented = false
+                    }
+                }
+            } message: {
+                Text("This action cannot be undone. All files will be permanently removed.")
+            }
         }
     }
 
@@ -411,7 +494,9 @@ struct IntSettingsSliderView: View {
             smoothKernelSize: .constant(21),
             selectedSAMModel: .constant(.tiny),
             classNames: .constant(["iris", "eyelid", "sclera", "pupil", "", "", "", ""]),
-            onClearClassNames: {}
+            showDeleteButton: .constant(false),
+            onClearClassNames: {},
+            onDeleteAllFiles: {}
         )
     }
     .frame(width: 400, height: 600)

@@ -98,11 +98,30 @@ class CanvasViewModel: ObservableObject {
         }
     }
 
+    /// Class IDs whose annotations are temporarily hidden (not rendered)
+    @Published var hiddenClassIDs: Set<Int> = [] {
+        didSet {
+            renderer?.hiddenClassIDs = hiddenClassIDs
+        }
+    }
+
     /// UserDefaults key for class names
     private static let classNamesKey = "annotty.classNames"
 
     /// UserDefaults key for last viewed image
     private static let lastImageNameKey = "annotty.lastImageName"
+
+    /// UserDefaults key for showing delete button
+    private static let showDeleteButtonKey = "annotty.showDeleteButton"
+
+    // MARK: - UI Preferences
+
+    /// Whether to show the Delete button in the top bar (default: hidden)
+    @Published var showDeleteButton: Bool = false {
+        didSet {
+            UserDefaults.standard.set(showDeleteButton, forKey: Self.showDeleteButtonKey)
+        }
+    }
 
     // MARK: - Display Settings
 
@@ -212,7 +231,19 @@ class CanvasViewModel: ObservableObject {
         setupBindings()
         setupGestureCallbacks()
         loadClassNames()
+        loadUIPreferences()
         initializeProjectFolder()
+        observeImportNotification()
+    }
+
+    /// Subscribe to import notifications from ImportCoordinator
+    private func observeImportNotification() {
+        NotificationCenter.default.publisher(for: .didImportImages)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.reloadImagesFromProject()
+            }
+            .store(in: &cancellables)
     }
 
     /// Initialize the project folder structure and load existing images
@@ -228,6 +259,7 @@ class CanvasViewModel: ObservableObject {
         do {
             try ProjectFileService.shared.initializeProject(at: documentsURL)
             print("[Project] Folder structure: images/, annotations/, labels/")
+            ProjectFileService.shared.cleanInbox()
             reloadImagesFromProject()
         } catch {
             print("[Project] Failed to initialize: \(error)")
@@ -288,6 +320,21 @@ class CanvasViewModel: ObservableObject {
         }
     }
 
+    /// Import multiple images to the project (batch)
+    func importImages(from urls: [URL]) {
+        var importedCount = 0
+        for url in urls {
+            do {
+                _ = try ProjectFileService.shared.copyImageToProject(url)
+                importedCount += 1
+            } catch {
+                print("[Import] Failed to copy \(url.lastPathComponent): \(error)")
+            }
+        }
+        print("[Import] Batch imported \(importedCount)/\(urls.count) images")
+        reloadImagesFromProject()
+    }
+
     /// Import all images from a folder
     func importImagesFromFolder(_ folderURL: URL) {
         let fileManager = FileManager.default
@@ -317,6 +364,38 @@ class CanvasViewModel: ObservableObject {
             reloadImagesFromProject()
         } catch {
             print("[Import] Folder read failed: \(error)")
+        }
+    }
+
+    /// Handle image providers from drag & drop
+    func handleDroppedProviders(_ providers: [NSItemProvider]) {
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier("public.image") {
+                provider.loadFileRepresentation(forTypeIdentifier: "public.image") { [weak self] url, error in
+                    guard let url = url else {
+                        print("[Drop] Failed to load file: \(error?.localizedDescription ?? "unknown")")
+                        return
+                    }
+
+                    // Copy to a temporary location (the provided URL is deleted after this callback)
+                    let tempDir = FileManager.default.temporaryDirectory
+                    let tempURL = tempDir.appendingPathComponent(url.lastPathComponent)
+                    try? FileManager.default.removeItem(at: tempURL)
+                    try? FileManager.default.copyItem(at: url, to: tempURL)
+
+                    DispatchQueue.main.async {
+                        guard let self = self else { return }
+                        do {
+                            _ = try ProjectFileService.shared.copyImageToProject(tempURL)
+                            try? FileManager.default.removeItem(at: tempURL)
+                            self.reloadImagesFromProject()
+                            print("[Drop] Imported: \(url.lastPathComponent)")
+                        } catch {
+                            print("[Drop] Import failed: \(error)")
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1424,10 +1503,75 @@ class CanvasViewModel: ObservableObject {
         }
     }
 
+    /// Load UI preferences from UserDefaults
+    private func loadUIPreferences() {
+        // UserDefaults.bool returns false if key doesn't exist, which is our desired default
+        showDeleteButton = UserDefaults.standard.bool(forKey: Self.showDeleteButtonKey)
+    }
+
     /// Clear all class names
     func clearClassNames() {
         classNames = Array(repeating: "", count: 8)
         print("[ClassNames] Cleared")
+    }
+
+    /// Delete all project files (images, annotations, labels) and reset canvas state
+    func deleteAllFiles() {
+        // Save nothing — we're deleting everything
+        maskModified = false
+
+        // Delete all files from disk
+        let count = ProjectFileService.shared.deleteAllProjectFiles()
+
+        // Clear in-memory state
+        renderer?.clearMask()
+        undoManager.clear()
+        imageManager.setImages([])
+        currentImageIndex = 0
+        totalImageCount = 0
+
+        // Remove last-image bookmark so next launch starts fresh
+        UserDefaults.standard.removeObject(forKey: Self.lastImageNameKey)
+
+        print("[Delete] All project files removed (\(count) files), canvas reset")
+    }
+
+    /// Delete the current image and its annotation from the project
+    func deleteCurrentImage() {
+        guard let currentItem = imageManager.currentItem else { return }
+
+        // Don't save the mask for the image we're about to delete
+        maskModified = false
+
+        // Delete from disk
+        let deleted = ProjectFileService.shared.deleteImage(at: currentItem.url)
+        guard deleted else { return }
+
+        print("[Delete] Removed image: \(currentItem.baseName)")
+
+        // Clear undo history (no longer relevant)
+        undoManager.clear()
+
+        // Reload image list and navigate
+        let imageURLs = ProjectFileService.shared.getImageURLs()
+        imageManager.setImages(imageURLs)
+
+        if imageManager.currentItem != nil {
+            loadCurrentImage()
+        } else {
+            // No images left — clear canvas
+            renderer?.clearMask()
+            UserDefaults.standard.removeObject(forKey: Self.lastImageNameKey)
+        }
+    }
+
+    /// Toggle visibility of a specific class's annotations
+    func toggleClassVisibility(_ classID: Int) {
+        if hiddenClassIDs.contains(classID) {
+            hiddenClassIDs.remove(classID)
+        } else {
+            hiddenClassIDs.insert(classID)
+        }
     }
 
     // MARK: - SAM Integration
