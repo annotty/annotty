@@ -199,6 +199,12 @@ class CanvasViewModel: ObservableObject {
     /// Flag to track if mask has been modified since last save
     private var maskModified: Bool = false
 
+    /// Generation counter for stale load prevention during rapid navigation
+    private var loadGeneration: Int = 0
+
+    /// LRU cache for preloaded image + annotation data
+    private let imageLoadCache = ImageLoadCache()
+
     /// Original bbox at stroke start (for proper patch expansion)
     private var originalStrokeBbox: CGRect = .null
     /// Original patch at stroke start (for proper patch expansion)
@@ -274,6 +280,9 @@ class CanvasViewModel: ObservableObject {
                 folderURL.stopAccessingSecurityScopedResource()
             }
         }
+
+        // Clear cache on project switch
+        Task { await imageLoadCache.clear() }
 
         do {
             try ProjectFileService.shared.initializeProject(at: folderURL)
@@ -594,6 +603,9 @@ class CanvasViewModel: ObservableObject {
             return
         }
 
+        // Invalidate cache for saved image (annotation changed on disk)
+        Task { await imageLoadCache.invalidate(for: imageURL) }
+
         // Reset modified flag and show saving indicator
         maskModified = false
         isSaving = true
@@ -629,37 +641,129 @@ class CanvasViewModel: ObservableObject {
     private func loadCurrentImage() {
         guard let item = imageManager.currentItem else { return }
 
+        // Phase A: immediate main-thread setup
         isLoading = true
+        maskModified = false
+        undoManager.clear()
+        clearSAMCache()
 
-        // Defer UI update to allow loading indicator to appear
-        DispatchQueue.main.async { [weak self] in
+        loadGeneration += 1
+        let generation = loadGeneration
+        let imageURL = item.url
+        let annotationURL: URL? = {
+            if let url = ProjectFileService.shared.getAnnotationURL(for: imageURL),
+               FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+            return nil
+        }()
+
+        // Phase B: heavy work on background thread
+        Task.detached(priority: .userInitiated) { [weak self] in
             guard let self = self else { return }
 
-            self.loadImage(from: item.url)
+            // Check cache first
+            let cached = await self.imageLoadCache.get(for: imageURL)
 
-            // Reset mask modified flag for new image
-            self.maskModified = false
+            let imageData: TextureManager.PreloadedImageData
+            let maskData: [UInt8]?
 
-            // Clear undo/redo history for new image (prevents cross-image contamination)
-            self.undoManager.clear()
+            if let cached = cached {
+                imageData = cached.imageData
+                maskData = cached.maskData
+            } else {
+                // Cache miss — decode from disk
+                guard let decoded = try? TextureManager.prepareImageData(from: imageURL) else {
+                    await MainActor.run { self.isLoading = false }
+                    return
+                }
+                imageData = decoded
 
-            // Fit image to view after loading
-            self.resetView()
+                // Parse annotation if exists
+                if let annotationURL = annotationURL {
+                    maskData = CanvasViewModel.parseAnnotationInBackground(
+                        annotationURL: annotationURL,
+                        targetMaskWidth: decoded.maskWidth,
+                        targetMaskHeight: decoded.maskHeight
+                    )
+                } else {
+                    maskData = nil
+                }
 
-            // Clear SAM cache when loading new image
-            self.clearSAMCache()
-
-            // Always check for annotation file dynamically (not just cached URL)
-            // This ensures newly saved annotations are detected
-            if let annotationURL = ProjectFileService.shared.getAnnotationURL(for: item.url),
-               FileManager.default.fileExists(atPath: annotationURL.path) {
-                self.loadAnnotation(from: annotationURL)
+                // Store in cache
+                await self.imageLoadCache.put(
+                    url: imageURL,
+                    entry: ImageLoadCache.Entry(imageData: imageData, maskData: maskData)
+                )
             }
 
-            // Save last viewed image name for resume
-            UserDefaults.standard.set(item.baseName, forKey: Self.lastImageNameKey)
+            // Phase C: apply to GPU on main thread
+            await MainActor.run {
+                // Generation check — discard stale loads from rapid navigation
+                guard self.loadGeneration == generation else { return }
 
-            self.isLoading = false
+                do {
+                    try self.renderer?.applyPreloadedImage(imageData)
+
+                    if let maskData = maskData {
+                        try self.renderer?.textureManager.uploadMask(maskData)
+                        print("[Load] Loaded annotation (\(imageData.maskWidth)x\(imageData.maskHeight))")
+                    }
+                } catch {
+                    print("[Load] Failed: \(error)")
+                }
+
+                self.resetView()
+                UserDefaults.standard.set(item.baseName, forKey: Self.lastImageNameKey)
+                self.isLoading = false
+
+                // Prefetch adjacent images
+                self.prefetchAdjacentImages()
+            }
+        }
+    }
+
+    /// Prefetch previous and next images into cache on a low-priority background thread
+    private func prefetchAdjacentImages() {
+        let items = imageManager.items
+        let currentIndex = imageManager.currentIndex
+        guard items.count > 1 else { return }
+
+        var adjacentURLs: [(URL, URL?)] = []
+        if currentIndex + 1 < items.count {
+            let url = items[currentIndex + 1].url
+            let annURL = ProjectFileService.shared.getAnnotationURL(for: url)
+            adjacentURLs.append((url, annURL))
+        }
+        if currentIndex > 0 {
+            let url = items[currentIndex - 1].url
+            let annURL = ProjectFileService.shared.getAnnotationURL(for: url)
+            adjacentURLs.append((url, annURL))
+        }
+
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self = self else { return }
+            for (url, annURL) in adjacentURLs {
+                // Skip if already cached
+                if await self.imageLoadCache.get(for: url) != nil { continue }
+
+                guard let decoded = try? TextureManager.prepareImageData(from: url) else { continue }
+
+                var maskData: [UInt8]? = nil
+                if let annURL = annURL,
+                   FileManager.default.fileExists(atPath: annURL.path) {
+                    maskData = CanvasViewModel.parseAnnotationInBackground(
+                        annotationURL: annURL,
+                        targetMaskWidth: decoded.maskWidth,
+                        targetMaskHeight: decoded.maskHeight
+                    )
+                }
+
+                await self.imageLoadCache.put(
+                    url: url,
+                    entry: ImageLoadCache.Entry(imageData: decoded, maskData: maskData)
+                )
+            }
         }
     }
 
@@ -1256,6 +1360,16 @@ class CanvasViewModel: ObservableObject {
         (255, 102, 178)    // 8: pink
     ]
 
+    /// O(1) exact-match color lookup: key = r<<16 | g<<8 | b, value = classID (1-8)
+    private static let exactColorLookup: [UInt32: UInt8] = {
+        var table = [UInt32: UInt8]()
+        for (index, (r, g, b)) in classRGBColors.enumerated() {
+            let key = UInt32(r) << 16 | UInt32(g) << 8 | UInt32(b)
+            table[key] = UInt8(index + 1)
+        }
+        return table
+    }()
+
     /// Create a multi-class colored PNG from mask data
     /// Mask values: 0=background(white), 1-8=class colors
     private func createColoredPNG(from maskData: [UInt8], width: Int, height: Int, color: Color) -> Data? {
@@ -1306,31 +1420,46 @@ class CanvasViewModel: ObservableObject {
     /// Find the nearest class ID for a given RGB color
     /// Returns 1-8 for matching class colors, or 1 as fallback
     private func findNearestClassID(r: UInt8, g: UInt8, b: UInt8) -> Int {
+        Self.findNearestClassIDStatic(r: r, g: g, b: b)
+    }
+
+    /// Thread-safe static version: O(1) exact match, fallback to nearest neighbor
+    private static func findNearestClassIDStatic(r: UInt8, g: UInt8, b: UInt8) -> Int {
+        // O(1) exact match (covers the vast majority of pixels)
+        let key = UInt32(r) << 16 | UInt32(g) << 8 | UInt32(b)
+        if let classID = exactColorLookup[key] {
+            return Int(classID)
+        }
+
+        // Fallback: nearest neighbor for anti-aliased pixels
         var minDistance = Int.max
         var nearestClassID = 1
-
-        for (index, (cr, cg, cb)) in Self.classRGBColors.enumerated() {
+        for (index, (cr, cg, cb)) in classRGBColors.enumerated() {
             let distance = abs(Int(r) - Int(cr)) + abs(Int(g) - Int(cg)) + abs(Int(b) - Int(cb))
             if distance < minDistance {
                 minDistance = distance
-                nearestClassID = index + 1  // classID is 1-indexed
+                nearestClassID = index + 1
             }
         }
-
         return nearestClassID
     }
 
     /// Resize binary mask using nearest neighbor interpolation
     private func resizeMask(_ source: [UInt8], fromWidth: Int, fromHeight: Int, toWidth: Int, toHeight: Int) -> [UInt8] {
+        Self.resizeMaskStatic(source, fromWidth: fromWidth, fromHeight: fromHeight, toWidth: toWidth, toHeight: toHeight)
+    }
+
+    /// Thread-safe static resize with nearest neighbor interpolation
+    private static func resizeMaskStatic(_ source: [UInt8], fromWidth: Int, fromHeight: Int, toWidth: Int, toHeight: Int) -> [UInt8] {
         var result = [UInt8](repeating: 0, count: toWidth * toHeight)
 
         let scaleX = Float(fromWidth) / Float(toWidth)
         let scaleY = Float(fromHeight) / Float(toHeight)
 
         for y in 0..<toHeight {
+            let srcY = Int(Float(y) * scaleY)
             for x in 0..<toWidth {
                 let srcX = Int(Float(x) * scaleX)
-                let srcY = Int(Float(y) * scaleY)
                 let srcIndex = srcY * fromWidth + srcX
                 let dstIndex = y * toWidth + x
 
@@ -1341,6 +1470,78 @@ class CanvasViewModel: ObservableObject {
         }
 
         return result
+    }
+
+    /// Parse annotation PNG to class ID mask on a background thread.
+    /// All operations (file I/O, decode, pixel parsing) are thread-safe.
+    static func parseAnnotationInBackground(
+        annotationURL: URL,
+        targetMaskWidth: Int,
+        targetMaskHeight: Int
+    ) -> [UInt8]? {
+        guard let data = try? Data(contentsOf: annotationURL),
+              let image = UIImage(data: data),
+              let cgImage = image.cgImage else {
+            return nil
+        }
+
+        let width = cgImage.width
+        let height = cgImage.height
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var pixelData = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: &pixelData,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        // Convert colored PNG to class ID mask with pointer-based access
+        let pixelCount = width * height
+        var maskData = [UInt8](repeating: 0, count: pixelCount)
+
+        pixelData.withUnsafeBufferPointer { pixelBuf in
+            maskData.withUnsafeMutableBufferPointer { maskBuf in
+                guard let pixelPtr = pixelBuf.baseAddress,
+                      let maskPtr = maskBuf.baseAddress else { return }
+
+                for i in 0..<pixelCount {
+                    let offset = i * bytesPerPixel
+                    let r = pixelPtr[offset]
+                    let g = pixelPtr[offset + 1]
+                    let b = pixelPtr[offset + 2]
+                    let a = pixelPtr[offset + 3]
+
+                    // Background check: transparent or white
+                    if a < 128 || (r > 250 && g > 250 && b > 250) {
+                        maskPtr[i] = 0
+                    } else {
+                        maskPtr[i] = UInt8(findNearestClassIDStatic(r: r, g: g, b: b))
+                    }
+                }
+            }
+        }
+
+        // Resize if needed
+        if width == targetMaskWidth && height == targetMaskHeight {
+            return maskData
+        } else {
+            return resizeMaskStatic(
+                maskData,
+                fromWidth: width, fromHeight: height,
+                toWidth: targetMaskWidth, toHeight: targetMaskHeight
+            )
+        }
     }
 
     // MARK: - Flood Fill
@@ -1523,8 +1724,8 @@ class CanvasViewModel: ObservableObject {
         // Delete all files from disk
         let count = ProjectFileService.shared.deleteAllProjectFiles()
 
-        // Clear in-memory state
-        renderer?.clearMask()
+        // Clear in-memory state (image + mask textures)
+        renderer?.textureManager.clear()
         undoManager.clear()
         imageManager.setImages([])
         currentImageIndex = 0
@@ -1542,6 +1743,9 @@ class CanvasViewModel: ObservableObject {
 
         // Don't save the mask for the image we're about to delete
         maskModified = false
+
+        // Invalidate cache for deleted image
+        Task { await imageLoadCache.invalidate(for: currentItem.url) }
 
         // Delete from disk
         let deleted = ProjectFileService.shared.deleteImage(at: currentItem.url)

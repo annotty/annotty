@@ -354,6 +354,12 @@ class MetalRenderer: NSObject, ObservableObject {
         canvasTransform.maskScaleFactor = textureManager.maskScaleFactor
     }
 
+    /// Apply preloaded image data (fast path — CGImage already decoded off main thread)
+    func applyPreloadedImage(_ preloaded: TextureManager.PreloadedImageData) throws {
+        try textureManager.applyPreloadedImage(preloaded)
+        canvasTransform.maskScaleFactor = textureManager.maskScaleFactor
+    }
+
     // MARK: - Viewport
 
     /// Update viewport size and scale factor

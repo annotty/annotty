@@ -38,6 +38,66 @@ class TextureManager {
         self.textureLoader = MTKTextureLoader(device: device)
     }
 
+    // MARK: - Preloaded Image Data (for background loading)
+
+    /// Holds decoded image data prepared on a background thread.
+    /// CGImage is immutable and thread-safe, so it can be created off-main
+    /// and consumed on the main thread for GPU texture creation.
+    struct PreloadedImageData {
+        let cgImage: CGImage
+        let imageWidth: Int
+        let imageHeight: Int
+        let maskWidth: Int
+        let maskHeight: Int
+        let maskScaleFactor: Float
+    }
+
+    /// Decode image from URL on any thread (no Metal dependency).
+    /// Returns PreloadedImageData ready for applyPreloadedImage() on main thread.
+    static func prepareImageData(from url: URL) throws -> PreloadedImageData {
+        guard let data = try? Data(contentsOf: url),
+              let uiImage = UIImage(data: data),
+              let cgImage = uiImage.cgImage else {
+            throw TextureError.invalidImage
+        }
+
+        let width = cgImage.width
+        let height = cgImage.height
+
+        let maxEdge = max(width, height)
+        let scaleFactor = min(2.0, Float(maxMaskDimension) / Float(maxEdge))
+        let mw = Int(Float(width) * scaleFactor)
+        let mh = Int(Float(height) * scaleFactor)
+
+        return PreloadedImageData(
+            cgImage: cgImage,
+            imageWidth: width,
+            imageHeight: height,
+            maskWidth: mw,
+            maskHeight: mh,
+            maskScaleFactor: scaleFactor
+        )
+    }
+
+    /// Apply preloaded image data to GPU textures (must be called on main thread).
+    /// Creates image texture from CGImage and initializes a fresh mask texture.
+    func applyPreloadedImage(_ preloaded: PreloadedImageData) throws {
+        imageSize = CGSize(width: preloaded.imageWidth, height: preloaded.imageHeight)
+        maskScaleFactor = preloaded.maskScaleFactor
+        maskSize = CGSize(width: preloaded.maskWidth, height: preloaded.maskHeight)
+
+        let options: [MTKTextureLoader.Option: Any] = [
+            .textureUsage: MTLTextureUsage.shaderRead.rawValue,
+            .textureStorageMode: MTLStorageMode.shared.rawValue,
+            .SRGB: false
+        ]
+
+        let texture = try textureLoader.newTexture(cgImage: preloaded.cgImage, options: options)
+        imageTexture = texture
+
+        maskTexture = try createMaskTexture()
+    }
+
     // MARK: - Image Loading
 
     /// Load source image from URL using MTKTextureLoader (GPU-accelerated)
